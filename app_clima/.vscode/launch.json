@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "AppClima no Andorid",
+      "request": "launch",
+      "type": "dart",
+      "args": ["--dart-define=WEATHER_API_KEY=239e030cdf444ff6a7c133133261709"]
+    }
+  ]
+}

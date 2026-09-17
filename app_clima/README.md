@@ -1,5 +1,17 @@
 # AppClima
 
+## Configurar a chave do clima
+
+O app le a chave da WeatherAPI em tempo de execucao. Isso evita deixar a chave exposta no codigo ou no Git.
+
+No Android Studio, abra **Run > Edit Configurations**, escolha a configuracao Flutter do AppClima e, em **Additional run args**, informe:
+
+```text
+--dart-define=WEATHER_API_KEY=SUA_CHAVE_DA_WEATHERAPI
+```
+
+Em seguida, rode o app normalmente. Na primeira abertura, permita o acesso a localizacao para que o mapa seja centralizado na sua posicao.
+
 Prototipo em Flutter do AppClima, com foco inicial em Android.
 
 ## Foco atual
@@ -10,7 +22,6 @@ Prototipo em Flutter do AppClima, com foco inicial em Android.
 - Tela de clima atual.
 - Tela de rota com alertas climaticos no trajeto.
 - Tela de historico.
-- Tela de aprendizado.
 
 As pastas de iOS, web e desktop foram geradas pelo Flutter, mas por enquanto o desenvolvimento e os testes devem mirar Android.
 

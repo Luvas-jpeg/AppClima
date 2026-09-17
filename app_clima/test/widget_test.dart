@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets('abre o prototipo do AppClima', (tester) async {
-    await tester.pumpWidget(const AppClimaPrototype());
+    await tester.pumpWidget(const AppClimaApp());
 
     expect(find.text('Clima agora'), findsOneWidget);
     expect(find.text('Sao Paulo, SP'), findsOneWidget);

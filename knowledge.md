@@ -279,24 +279,53 @@ Telas do prototipo:
 1. Clima atual.
 2. Rota com clima.
 3. Historico.
-4. Aprender.
 
 Decisoes representadas no prototipo:
 
 - Navegacao por abas com `NavigationBar`.
 - Selecao de transporte com `ChoiceChip`.
-- Rota desenhada com `CustomPainter`.
-- Alertas climaticos com bolhas na rota.
-- Trechos coloridos para chuva, vento e radiacao.
+- Campo para o usuario informar o destino.
+- Mapa ilustrativo na tela de clima, com bolhas para as condicoes nas regioes proximas.
+- Rota ilustrativa com bolhas para chuva, vento e radiacao nos pontos do caminho.
 - Historico local ainda simulado.
 
 Depois disso, o projeto pode evoluir para:
 
-1. Mapa.
-2. Escolha de destino.
+1. Mapa real.
+2. Busca real de destino.
 3. Calculo de rota.
 4. Previsao climatica ao longo do caminho.
-5. Alertas visuais na rota.
+5. Alertas visuais alimentados por dados reais.
+
+### Mapa ilustrativo e mapa real
+
+O mapa que aparece agora foi desenhado pelo proprio Flutter para testar a ideia da interface. Ele nao mostra ruas reais, nao usa GPS e nao faz requisicoes na internet.
+
+Na versao real, usaremos um pacote de mapas no Flutter. Esse pacote exibe o mapa e permite colocar marcadores, bolhas e a posicao do usuario. O servico de rotas recebera origem, destino e meio de transporte e retornara o caminho. A API de clima retornara a previsao para os pontos daquele caminho.
+
+### Decisao sobre a camada termica
+
+A primeira versao da camada termica sera continua e simples. Ela mostra as previsoes reais obtidas para pontos da area que o usuario esta vendo, misturando as cores para formar regioes sem bordas de bolhas.
+
+Nao vamos aumentar a quantidade de pontos nem trocar a fonte de dados apenas para tentar diferenciar todos os bairros. Essa melhoria pode ser reavaliada depois, caso seja necessaria para a aula ou para uma versao futura do app.
+
+### Primeira integracao real: clima e localizacao
+
+A aba Clima agora usa tres pacotes: `flutter_map` para exibir o mapa, `geolocator` para pedir a localizacao atual ao Android e `http` para consultar a WeatherAPI.
+
+Para proteger a chave, ela nao deve ser escrita em `main.dart`. O Flutter recebe valores de configuracao no momento de rodar o app com `--dart-define`. Neste projeto, o nome usado e `WEATHER_API_KEY`.
+
+O mapa completo consulta uma grade de coordenadas ao redor da area visualizada e usa esses dados para desenhar uma camada termica. A cor mais forte representa um valor maior no filtro ativo.
+
+### Camada termica por regioes
+
+Uma previsao para uma cidade inteira nao representa todos os bairros. Para mostrar variacoes no mapa, o app precisa dividir a area visivel em uma grade, por exemplo 5 por 5 pontos. Cada ponto tem latitude e longitude e recebe uma previsao propria.
+
+Depois, o app interpola os valores: pontos proximos com valores parecidos formam uma mancha continua de cor. Esse processo e chamado de **interpolacao espacial**.
+
+Mais pontos deixam o mapa mais detalhado, mas aumentam o custo de requisicoes. Por isso, a grade deve ser atualizada somente quando o usuario para de mover o mapa e os resultados devem ser guardados em cache por alguns minutos.
+
+Para uma grade grande, o Open-Meteo pode ser mais adequado: ele aceita varias coordenadas em uma unica chamada. A WeatherAPI continua util para os dados detalhados da localizacao atual.
 
 ## Conceitos para estudar em ordem
 
@@ -321,6 +350,26 @@ Depois disso, o projeto pode evoluir para:
 - Tratar erros de internet e permissao negada.
 - Pensar primeiro em uma versao simples funcionando.
 - Registrar decisoes tecnicas neste arquivo ou em outros `.md`.
+
+## Organizacao Clean Architecture
+
+O projeto passou a separar responsabilidades por funcionalidade:
+
+```text
+lib/
+  core/                 # componentes compartilhados
+  features/
+    weather/
+      data/             # chamadas para servicos externos
+      domain/           # entidades que representam os dados
+      presentation/     # telas e widgets do clima
+    history/
+      presentation/     # tela de historico
+    route/
+      presentation/     # tela e elementos da rota
+```
+
+`main.dart` deve apenas iniciar o aplicativo e reunir as telas. Uma tela nao deve fazer a requisicao HTTP diretamente: ela pede dados a uma classe da camada `data`, que devolve entidades da camada `domain`.
 
 ## Glossario rapido
 
