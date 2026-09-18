@@ -9,6 +9,9 @@ um GPS normal, o usuário defini uma localização, e tem o caminho mais rápido
 No trajeto deste caminho, terá algumas previsões durante o caminho, por exemplo, ele quer ir numa padaria que está a 5km
 e tem 10 minutos de caminhada, só que daqui 5 minutos, uma parte específica do caminho, vai começar a chover, eu quero que isso fique visível
 na tragetória do GPS.
+O objetivo desse app, seria para pessoas que viajam muito, mostrar previsões de climas da cidade em que vão ficar, ou hospedar, no caminho, ter as previsões no caminho, caso tiver chuva,
+ventania, ou estiver muti quente, mostrar o local mais perto para repousar, talvez colocar pontos em que tem radar, colocar alguma maniera que caso a pessoa tiver com o pneu furado, ou
+acontecer alguma coisa, ter um botão de sos no app, para pessoas próximas poderem ajudar.
 
 # Arquitetura
 

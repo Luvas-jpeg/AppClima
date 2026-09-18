@@ -49,3 +49,4 @@ app.*.map.json
 
 # Chaves locais usadas pelo AppClima.
 .env
+.vscode/launch.json

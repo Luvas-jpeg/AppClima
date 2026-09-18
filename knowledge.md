@@ -321,6 +321,8 @@ O mapa completo consulta uma grade de coordenadas ao redor da area visualizada e
 
 Uma previsao para uma cidade inteira nao representa todos os bairros. Para mostrar variacoes no mapa, o app precisa dividir a area visivel em uma grade, por exemplo 5 por 5 pontos. Cada ponto tem latitude e longitude e recebe uma previsao propria.
 
+Na versao atual do AppClima, a grade e de **3 por 3**: sao nove pontos na area visivel. O codigo usa `divisions = 2`; como os indices incluem 0, 1 e 2 em cada direcao, o resultado e 3 linhas por 3 colunas. Essa quantidade evita muitas requisicoes enquanto o usuario move o mapa.
+
 Depois, o app interpola os valores: pontos proximos com valores parecidos formam uma mancha continua de cor. Esse processo e chamado de **interpolacao espacial**.
 
 Mais pontos deixam o mapa mais detalhado, mas aumentam o custo de requisicoes. Por isso, a grade deve ser atualizada somente quando o usuario para de mover o mapa e os resultados devem ser guardados em cache por alguns minutos.
@@ -366,10 +368,39 @@ lib/
     history/
       presentation/     # tela de historico
     route/
+      data/             # busca de destino e calculo de rota
+      domain/           # rota e destino encontrados
       presentation/     # tela e elementos da rota
 ```
 
 `main.dart` deve apenas iniciar o aplicativo e reunir as telas. Uma tela nao deve fazer a requisicao HTTP diretamente: ela pede dados a uma classe da camada `data`, que devolve entidades da camada `domain`.
+
+### GPS e clima na rota
+
+A tela de rota junta quatro responsabilidades, cada uma em seu lugar:
+
+1. `LocationService` pede a permissao do Android e devolve a posicao do GPS.
+2. `RouteService.findDestination` usa **geocodificacao**: transforma o texto digitado, como "Parque Ibirapuera", em latitude e longitude.
+3. `RouteService.calculateRoute` envia origem, destino e meio de transporte ao OpenRouteService. A resposta possui varios pontos que formam a linha da rota.
+4. A tela escolhe tres desses pontos — saida, meio e chegada — e pede a previsao a `WeatherService`. Assim o usuario ve como o clima pode variar no percurso sem gastar uma chamada de API para cada ponto da linha.
+
+**Profile** e o nome que a API usa para o tipo de deslocamento. Por exemplo, `foot-walking` representa caminhada e `cycling-regular` representa bicicleta. Nesta primeira versao, moto usa o profile de carro (`driving-car`), pois e o perfil disponivel mais proximo no servico escolhido.
+
+### Previsao por trecho da rota
+
+A duracao da rota permite estimar quando a pessoa chegara a cada parte do caminho. Se uma viagem dura 20 minutos, um ponto no meio recebe uma previsao para aproximadamente 10 minutos depois da partida. A WeatherAPI oferece previsoes por hora, entao o app usa a hora mais proxima desse horario estimado.
+
+Para manter o uso da API controlado, a primeira versao consulta cinco pontos: saida, tres trechos intermediarios e chegada. A linha da rota muda de cor pela chance de chuva do trecho: verde-azulado sem chuva, azul claro para chance menor e azul escuro para chance alta. Os cartoes abaixo do mapa mostram horario previsto de chegada, probabilidade e precipitacao em milimetros.
+
+`precip_mm` e a quantidade de precipitacao em milimetros. Ela nao representa mililitros diretamente: 1 mm de chuva distribuido sobre 1 metro quadrado corresponde aproximadamente a 1 litro de agua. `feelslike_c` e a sensacao termica calculada pela API; ela pode ser diferente da temperatura por causa de vento, umidade e radiacao.
+
+### Navegacao por GPS em primeiro plano
+
+Depois que uma rota e calculada, o botao **Iniciar rota** cria um fluxo de atualizacoes do GPS. A cada nova posicao, o app encontra o ponto mais proximo na linha da rota, atualiza o marcador no mapa e calcula uma estimativa simples do progresso. O cartao de navegacao mostra a previsao do proximo trecho.
+
+Essa primeira versao funciona enquanto o app esta aberto na tela. Navegacao com a tela bloqueada, em segundo plano ou com instrucoes por voz exige permissoes Android adicionais e uma etapa propria de implementacao.
+
+Ao iniciar a rota, o app abre o mapa de navegacao em tela cheia. A propriedade `heading` do GPS representa a direcao de movimento em graus; o mapa e rotacionado no sentido oposto para manter o caminho a frente do usuario voltado para cima. Se o aparelho ainda nao tiver uma direcao confiavel, o mapa permanece apontado para o norte.
 
 ## Glossario rapido
 

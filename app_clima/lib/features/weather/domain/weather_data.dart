@@ -9,6 +9,7 @@ class WeatherData {
     required this.windKph,
     required this.uv,
     required this.precipitationMm,
+    required this.forecastPrecipitationMm,
     required this.rainChance,
     required this.hours,
   });
@@ -20,6 +21,7 @@ class WeatherData {
   final double windKph;
   final double uv;
   final double precipitationMm;
+  final double forecastPrecipitationMm;
   final int rainChance;
   final List<ForecastHour> hours;
 }

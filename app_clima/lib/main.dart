@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 
@@ -8,8 +9,17 @@ import 'features/weather/data/weather_service.dart';
 import 'features/weather/domain/weather_data.dart';
 import 'core/widgets/app_widgets.dart';
 import 'features/history/presentation/history_page.dart';
+import 'features/route/presentation/route_page.dart';
 
-void main() {
+Future<void> main() async {
+  await dotenv.load(fileName: '.env');
+  assert(() {
+    debugPrint(
+      "Configuracao de APIs: WeatherAPI=${dotenv.env['WEATHER_API_KEY']?.isNotEmpty == true}, "
+      "OpenRouteService=${dotenv.env['ORS_API_KEY']?.isNotEmpty == true}",
+    );
+    return true;
+  }());
   runApp(const AppClimaApp());
 }
 
@@ -107,14 +117,16 @@ class _WeatherPageState extends State<WeatherPage> {
     try {
       final position = await LocationService.currentPosition();
       final location = LatLng(position.latitude, position.longitude);
-      final result = await WeatherService.fetchForecast(location);
 
       if (!mounted) return;
       setState(() {
         currentLocation = location;
-        weather = result;
       });
       mapController.move(location, 12.5);
+
+      final result = await WeatherService.fetchForecast(location);
+      if (!mounted) return;
+      setState(() => weather = result);
     } catch (error) {
       if (!mounted) return;
       setState(() => errorMessage = error.toString());
@@ -205,8 +217,10 @@ class WeatherMapCard extends StatelessWidget {
             children: [
               const Icon(Icons.map_outlined, color: Color(0xFF1B7F8C)),
               const SizedBox(width: 8),
-              const Text('Mapa do clima',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
+              const Text(
+                'Mapa do clima',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
               const Spacer(),
               IconButton(
                 onPressed: isLoading ? null : onLocate,
@@ -225,50 +239,60 @@ class WeatherMapCard extends StatelessWidget {
                 width: double.infinity,
                 child: Stack(
                   children: [
-                FlutterMap(
-                  mapController: mapController,
-                  options: MapOptions(initialCenter: location, initialZoom: 12.5),
-                  children: [
-                    TileLayer(
-                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.app_clima',
-                    ),
-                    MarkerLayer(
-                      markers: [
-                        Marker(
-                          point: location,
-                          width: 44,
-                          height: 44,
-                          child: const Icon(Icons.my_location,
-                              color: Color(0xFF12343B), size: 34),
+                    FlutterMap(
+                      mapController: mapController,
+                      options: MapOptions(
+                        initialCenter: location,
+                        initialZoom: 12.5,
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate:
+                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'com.example.app_clima',
+                        ),
+                        const SimpleAttributionWidget(
+                          source: Text('OpenStreetMap contributors'),
+                        ),
+                        MarkerLayer(
+                          markers: [
+                            Marker(
+                              point: location,
+                              width: 44,
+                              height: 44,
+                              child: const Icon(
+                                Icons.my_location,
+                                color: Color(0xFF12343B),
+                                size: 34,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
-                if (weather != null) ...[
-                  MapWeatherBubble(
-                    left: 12,
-                    top: 14,
-                    icon: Icons.water_drop,
-                    label: 'Chuva ${weather!.rainChance}%',
-                    color: const Color(0xFF2F80ED),
-                  ),
-                  MapWeatherBubble(
-                    right: 12,
-                    top: 72,
-                    icon: Icons.air,
-                    label: '${weather!.windKph.round()} km/h',
-                    color: const Color(0xFF6C63FF),
-                  ),
-                  MapWeatherBubble(
-                    left: 72,
-                    bottom: 14,
-                    icon: Icons.wb_sunny,
-                    label: 'UV ${weather!.uv.toStringAsFixed(1)}',
-                    color: const Color(0xFFE39D17),
-                  ),
-                ],
+                    if (weather != null) ...[
+                      MapWeatherBubble(
+                        left: 12,
+                        top: 14,
+                        icon: Icons.water_drop,
+                        label: 'Chuva ${weather!.rainChance}%',
+                        color: const Color(0xFF2F80ED),
+                      ),
+                      MapWeatherBubble(
+                        right: 12,
+                        top: 72,
+                        icon: Icons.air,
+                        label: '${weather!.windKph.round()} km/h',
+                        color: const Color(0xFF6C63FF),
+                      ),
+                      MapWeatherBubble(
+                        left: 72,
+                        bottom: 14,
+                        icon: Icons.wb_sunny,
+                        label: 'UV ${weather!.uv.toStringAsFixed(1)}',
+                        color: const Color(0xFFE39D17),
+                      ),
+                    ],
                     if (isLoading)
                       const Center(child: CircularProgressIndicator()),
                     const Positioned(
@@ -339,19 +363,27 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
     const edgeMargin = 0.25;
     final nearbyLocations = [
       for (var latitudeIndex = 0; latitudeIndex <= divisions; latitudeIndex++)
-        for (var longitudeIndex = 0; longitudeIndex <= divisions; longitudeIndex++)
+        for (
+          var longitudeIndex = 0;
+          longitudeIndex <= divisions;
+          longitudeIndex++
+        )
           LatLng(
             bounds.south +
                 ((bounds.north - bounds.south) *
-                    (edgeMargin + ((1 - (2 * edgeMargin)) * latitudeIndex / divisions))),
+                    (edgeMargin +
+                        ((1 - (2 * edgeMargin)) * latitudeIndex / divisions))),
             bounds.west +
                 ((bounds.east - bounds.west) *
-                    (edgeMargin + ((1 - (2 * edgeMargin)) * longitudeIndex / divisions))),
+                    (edgeMargin +
+                        ((1 - (2 * edgeMargin)) * longitudeIndex / divisions))),
           ),
     ];
 
     try {
-      final nearbyData = await Future.wait(nearbyLocations.map(WeatherService.fetchForecast));
+      final nearbyData = await Future.wait(
+        nearbyLocations.map(WeatherService.fetchForecast),
+      );
       final loadedPoints = [
         for (var index = 0; index < nearbyData.length; index++)
           WeatherPoint(nearbyLocations[index], nearbyData[index]),
@@ -363,7 +395,9 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
       });
     } catch (error) {
       if (!mounted) return;
-      setState(() => errorMessage = 'Nao foi possivel carregar os pontos do mapa.');
+      setState(
+        () => errorMessage = 'Nao foi possivel carregar os pontos do mapa.',
+      );
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -379,9 +413,12 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   @override
   Widget build(BuildContext context) {
     final visiblePoints = points.where((point) {
-      return selectedFilter != WeatherMapFilter.rain || point.weather.rainChance > 0;
+      return selectedFilter != WeatherMapFilter.rain ||
+          point.weather.rainChance > 0;
     });
-    final centralWeather = points.length >= 5 ? points[4].weather : widget.currentWeather;
+    final centralWeather = points.length >= 5
+        ? points[4].weather
+        : widget.currentWeather;
 
     return Scaffold(
       appBar: AppBar(
@@ -396,7 +433,12 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                 value: style,
                 child: Row(
                   children: [
-                    Icon(style.icon, color: style == selectedMapStyle ? const Color(0xFF1B7F8C) : null),
+                    Icon(
+                      style.icon,
+                      color: style == selectedMapStyle
+                          ? const Color(0xFF1B7F8C)
+                          : null,
+                    ),
                     const SizedBox(width: 8),
                     Text(style.label),
                   ],
@@ -432,14 +474,20 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.example.app_clima',
                 ),
+                const SimpleAttributionWidget(
+                  source: Text('OpenStreetMap contributors'),
+                ),
                 MarkerLayer(
                   markers: [
                     Marker(
                       point: widget.userLocation,
                       width: 40,
                       height: 40,
-                      child: const Icon(Icons.my_location,
-                          color: Color(0xFF12343B), size: 32),
+                      child: const Icon(
+                        Icons.my_location,
+                        color: Color(0xFF12343B),
+                        size: 32,
+                      ),
                     ),
                   ],
                 ),
@@ -482,7 +530,10 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 child: Text(
                   '${selectedFilter.label}: cor mais forte = valor maior',
                   style: const TextStyle(fontWeight: FontWeight.w700),
@@ -498,7 +549,9 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.94),
                   borderRadius: BorderRadius.circular(16),
-                  boxShadow: const [BoxShadow(blurRadius: 12, color: Color(0x33000000))],
+                  boxShadow: const [
+                    BoxShadow(blurRadius: 12, color: Color(0x33000000)),
+                  ],
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(10),
@@ -509,9 +562,14 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                     children: WeatherMapFilter.values.map((filter) {
                       return ChoiceChip(
                         selected: selectedFilter == filter,
-                        avatar: Icon(filter.icon, size: 18, color: filter.color),
+                        avatar: Icon(
+                          filter.icon,
+                          size: 18,
+                          color: filter.color,
+                        ),
                         label: Text(filter.label),
-                        onSelected: (_) => setState(() => selectedFilter = filter),
+                        onSelected: (_) =>
+                            setState(() => selectedFilter = filter),
                       );
                     }).toList(),
                   ),
@@ -538,13 +596,13 @@ class WeatherRegionStyle {
   static double intensityFor(WeatherMapFilter filter, WeatherData weather) {
     return switch (filter) {
       WeatherMapFilter.rain => weather.rainChance / 100,
-      WeatherMapFilter.wind => (weather.windKph / 45).clamp(0.2, 1.0).toDouble(),
+      WeatherMapFilter.wind =>
+        (weather.windKph / 45).clamp(0.2, 1.0).toDouble(),
       WeatherMapFilter.temperature =>
         (weather.temperature / 40).clamp(0.2, 1.0).toDouble(),
       WeatherMapFilter.uv => (weather.uv / 11).clamp(0.2, 1.0).toDouble(),
     };
   }
-
 }
 
 class ThermalMapPainter extends CustomPainter {
@@ -578,9 +636,11 @@ class ThermalMapPainter extends CustomPainter {
       canvas.drawCircle(center, radius, paint);
 
       final label = switch (filter) {
-        WeatherMapFilter.rain => '${point.weather.rainChance}%',
+        WeatherMapFilter.rain =>
+          '${point.weather.rainChance}%\n${point.weather.forecastPrecipitationMm.toStringAsFixed(1)} mm',
         WeatherMapFilter.wind => '${point.weather.windKph.round()} km/h',
-        WeatherMapFilter.temperature => '${point.weather.temperature.round()} C',
+        WeatherMapFilter.temperature =>
+          '${point.weather.temperature.round()} C\nS ${point.weather.feelsLike.round()} C',
         WeatherMapFilter.uv => 'UV ${point.weather.uv.toStringAsFixed(1)}',
       };
       final textPainter = TextPainter(
@@ -588,11 +648,12 @@ class ThermalMapPainter extends CustomPainter {
           text: label,
           style: const TextStyle(
             color: Colors.white,
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: FontWeight.w800,
             shadows: [Shadow(color: Color(0xAA000000), blurRadius: 4)],
           ),
         ),
+        textAlign: TextAlign.center,
         textDirection: TextDirection.ltr,
       )..layout();
       textPainter.paint(
@@ -632,7 +693,10 @@ class WeatherMapSummary extends StatelessWidget {
           children: [
             MapMetric(Icons.water_drop, '${weather.rainChance}% chuva'),
             MapMetric(Icons.air, '${weather.windKph.round()} km/h'),
-            MapMetric(Icons.device_thermostat, '${weather.temperature.round()} C'),
+            MapMetric(
+              Icons.device_thermostat,
+              '${weather.temperature.round()} C',
+            ),
             MapMetric(Icons.wb_sunny, 'UV ${weather.uv.toStringAsFixed(1)}'),
           ],
         ),
@@ -684,21 +748,53 @@ enum MapBaseStyle {
   light(
     'Claro',
     Icons.light_mode_outlined,
-    const ColorFilter.matrix(<double>[
-      1, 0, 0, 0, 0,
-      0, 1, 0, 0, 0,
-      0, 0, 1, 0, 0,
-      0, 0, 0, 1, 0,
+    ColorFilter.matrix(<double>[
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
     ]),
   ),
   dark(
     'Escuro',
     Icons.dark_mode_outlined,
-    const ColorFilter.matrix(<double>[
-      -1, 0, 0, 0, 255,
-      0, -1, 0, 0, 255,
-      0, 0, -1, 0, 255,
-      0, 0, 0, 1, 0,
+    ColorFilter.matrix(<double>[
+      -1,
+      0,
+      0,
+      0,
+      255,
+      0,
+      -1,
+      0,
+      0,
+      255,
+      0,
+      0,
+      -1,
+      0,
+      255,
+      0,
+      0,
+      0,
+      1,
+      0,
     ]),
   );
 
@@ -819,17 +915,20 @@ class WeatherMetricGrid extends StatelessWidget {
       runSpacing: 12,
       children: [
         MetricTile(
-            icon: Icons.water_drop,
-            label: 'Chuva',
-            value: weather == null ? '--' : '${weather!.rainChance}%'),
+          icon: Icons.water_drop,
+          label: 'Chuva',
+          value: weather == null ? '--' : '${weather!.rainChance}%',
+        ),
         MetricTile(
-            icon: Icons.air,
-            label: 'Vento',
-            value: weather == null ? '--' : '${weather!.windKph.round()} km/h'),
+          icon: Icons.air,
+          label: 'Vento',
+          value: weather == null ? '--' : '${weather!.windKph.round()} km/h',
+        ),
         MetricTile(
-            icon: Icons.wb_sunny,
-            label: 'UV',
-            value: weather == null ? '--' : weather!.uv.toStringAsFixed(1)),
+          icon: Icons.wb_sunny,
+          label: 'UV',
+          value: weather == null ? '--' : weather!.uv.toStringAsFixed(1),
+        ),
         MetricTile(
           icon: Icons.device_thermostat,
           label: 'Sensacao',
@@ -840,15 +939,15 @@ class WeatherMetricGrid extends StatelessWidget {
   }
 }
 
-class RoutePage extends StatefulWidget {
-  const RoutePage({super.key});
+class LegacyRoutePage extends StatefulWidget {
+  const LegacyRoutePage({super.key});
 
   @override
-  State<RoutePage> createState() => _RoutePageState();
+  State<LegacyRoutePage> createState() => _LegacyRoutePageState();
 }
 
-class _RoutePageState extends State<RoutePage> {
-  TransportType selectedTransport = TransportType.walking;
+class _LegacyRoutePageState extends State<LegacyRoutePage> {
+  LegacyTransportType selectedTransport = LegacyTransportType.walking;
   final destinationController = TextEditingController(text: 'Padaria Central');
 
   @override
@@ -891,12 +990,14 @@ class _RoutePageState extends State<RoutePage> {
           children: [
             Icon(Icons.my_location, size: 17, color: Color(0xFF1B7F8C)),
             SizedBox(width: 6),
-            Text('Saida: sua localizacao atual',
-                style: TextStyle(color: Color(0xFF5A6B70))),
+            Text(
+              'Saida: sua localizacao atual',
+              style: TextStyle(color: Color(0xFF5A6B70)),
+            ),
           ],
         ),
         const SizedBox(height: 18),
-        TransportSelector(
+        LegacyTransportSelector(
           selected: selectedTransport,
           onSelected: (transport) {
             setState(() => selectedTransport = transport);
@@ -913,14 +1014,14 @@ class _RoutePageState extends State<RoutePage> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                    destinationController.text.isEmpty
-                        ? 'Escolha um destino'
-                        : destinationController.text,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
+                      destinationController.text.isEmpty
+                          ? 'Escolha um destino'
+                          : destinationController.text,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
                   ),
                   Text(
                     selectedTransport.duration,
@@ -995,15 +1096,15 @@ class _RoutePageState extends State<RoutePage> {
   }
 }
 
-class TransportSelector extends StatelessWidget {
-  const TransportSelector({
+class LegacyTransportSelector extends StatelessWidget {
+  const LegacyTransportSelector({
     required this.selected,
     required this.onSelected,
     super.key,
   });
 
-  final TransportType selected;
-  final ValueChanged<TransportType> onSelected;
+  final LegacyTransportType selected;
+  final ValueChanged<LegacyTransportType> onSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -1011,10 +1112,10 @@ class TransportSelector extends StatelessWidget {
       height: 48,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: TransportType.values.length,
+        itemCount: LegacyTransportType.values.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final transport = TransportType.values[index];
+          final transport = LegacyTransportType.values[index];
           final isSelected = selected == transport;
 
           return ChoiceChip(
@@ -1108,7 +1209,10 @@ class MapWeatherBubble extends StatelessWidget {
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.72),
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white.withValues(alpha: 0.75), width: 2),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.75),
+            width: 2,
+          ),
           boxShadow: [
             BoxShadow(
               color: color.withValues(alpha: 0.28),
@@ -1140,13 +1244,13 @@ class MapWeatherBubble extends StatelessWidget {
   }
 }
 
-enum TransportType {
+enum LegacyTransportType {
   walking('Caminhada', '10 min', Icons.directions_walk),
   bike('Bicicleta', '6 min', Icons.directions_bike),
   motorcycle('Moto', '4 min', Icons.two_wheeler),
   car('Carro', '5 min', Icons.directions_car);
 
-  const TransportType(this.label, this.duration, this.icon);
+  const LegacyTransportType(this.label, this.duration, this.icon);
 
   final String label;
   final String duration;
