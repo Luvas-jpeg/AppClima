@@ -36,19 +36,20 @@ class InfoCard extends StatelessWidget {
 }
 
 class MetricTile extends StatelessWidget {
-  const MetricTile({required this.icon, required this.label, required this.value, super.key});
+  const MetricTile({required this.icon, required this.label, required this.value, this.width = 156, super.key});
   final IconData icon;
   final String label;
   final String value;
+  final double width;
   @override
   Widget build(BuildContext context) => InfoCard(
-        width: 156,
+        width: width,
         child: Row(children: [
           Icon(icon, color: const Color(0xFF1B7F8C)), const SizedBox(width: 10),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label, style: const TextStyle(color: Color(0xFF5A6B70))),
-            Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
-          ]),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF5A6B70))),
+            Text(value, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
+          ])),
         ]),
       );
 }
@@ -72,28 +73,25 @@ class AlertTile extends StatelessWidget {
 }
 
 class HistoryTile extends StatelessWidget {
-  const HistoryTile({required this.place, required this.detail, required this.icon, super.key});
+  const HistoryTile({required this.place, required this.detail, required this.icon, this.onTap, super.key});
   final String place;
   final String detail;
   final IconData icon;
+  final VoidCallback? onTap;
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(bottom: 10),
-        child: InfoCard(child: Row(children: [
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: InfoCard(child: Row(children: [
           Icon(icon, color: const Color(0xFF1B7F8C)), const SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(place, style: const TextStyle(fontWeight: FontWeight.w800)), const SizedBox(height: 4),
             Text(detail, style: const TextStyle(color: Color(0xFF5A6B70))),
-          ])), const Icon(Icons.chevron_right),
+          ])), Icon(onTap == null ? Icons.history : Icons.chevron_right),
         ])),
-      );
-}
-
-class SearchFieldMock extends StatelessWidget {
-  const SearchFieldMock({super.key});
-  @override
-  Widget build(BuildContext context) => TextField(
-        decoration: InputDecoration(hintText: 'Buscar cidade ou destino', prefixIcon: const Icon(Icons.search), filled: true, fillColor: Colors.white, border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE1EAEC)))),
+        ),
       );
 }
 

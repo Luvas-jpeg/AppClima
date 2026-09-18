@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -6,6 +7,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../core/widgets/app_widgets.dart';
+import '../../history/data/route_history_repository.dart';
+import '../../history/domain/route_history_entry.dart';
 import '../../weather/data/weather_service.dart';
 import '../../weather/domain/weather_data.dart';
 import '../data/route_service.dart';
@@ -13,7 +16,8 @@ import '../domain/route_result.dart';
 import 'route_destination_picker_page.dart';
 
 class RoutePage extends StatefulWidget {
-  const RoutePage({super.key});
+  const RoutePage({this.destinationNotifier, super.key});
+  final ValueNotifier<RouteDestination?>? destinationNotifier;
 
   @override
   State<RoutePage> createState() => _RoutePageState();
@@ -40,13 +44,30 @@ class _RoutePageState extends State<RoutePage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadCurrentLocation());
+    widget.destinationNotifier?.addListener(_applyHistoryDestination);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyHistoryDestination());
   }
 
   @override
   void dispose() {
+    widget.destinationNotifier?.removeListener(_applyHistoryDestination);
     _positionSubscription?.cancel();
     _destinationController.dispose();
     super.dispose();
+  }
+
+  void _applyHistoryDestination() {
+    final destination = widget.destinationNotifier?.value;
+    if (destination == null || !mounted) return;
+    setState(() {
+      _destination = destination;
+      _destinationController.text = destination.name;
+      _route = null;
+      _climatePoints = const [];
+      _errorMessage = null;
+    });
+    widget.destinationNotifier!.value = null;
+    _mapController.move(destination.location, 14);
   }
 
   Future<void> _loadCurrentLocation() async {
@@ -80,17 +101,28 @@ class _RoutePageState extends State<RoutePage> {
     if (selected == null || !mounted) return;
 
     setState(() {
-      _destination = RouteDestination(
-        name: 'Ponto selecionado no mapa',
-        location: selected,
-      );
-      _destinationController.text =
-          '${selected.latitude.toStringAsFixed(5)}, ${selected.longitude.toStringAsFixed(5)}';
+      _destination = RouteDestination(name: 'Buscando endereco...', location: selected, isMapSelection: true);
+      _destinationController.text = 'Buscando endereco...';
       _route = null;
       _climatePoints = const [];
       _errorMessage = null;
     });
     _mapController.move(selected, 14);
+    try {
+      final destination = await RouteService.reverseGeocode(selected);
+      if (!mounted) return;
+      setState(() {
+        _destination = destination;
+        _destinationController.text = destination.name;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _destination = RouteDestination(name: 'Ponto selecionado no mapa', location: selected, isMapSelection: true);
+        _destinationController.text = '${selected.latitude.toStringAsFixed(5)}, ${selected.longitude.toStringAsFixed(5)}';
+      });
+    }
+    if (mounted) await _buildRoute();
   }
 
   Future<void> _buildRoute() async {
@@ -109,7 +141,7 @@ class _RoutePageState extends State<RoutePage> {
         throw Exception('Digite um destino ou marque um ponto no mapa.');
       }
       final destination = destinationText.isNotEmpty &&
-              (_destination == null || _destination!.name != 'Ponto selecionado no mapa')
+              (_destination == null || !_destination!.isMapSelection)
           ? await RouteService.findDestination(destinationText, origin)
           : _destination!;
       final route = await RouteService.calculateRoute(
@@ -130,6 +162,9 @@ class _RoutePageState extends State<RoutePage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _fitRoute(route);
       });
+      // Salva primeiro: a previsao do clima e complementar e nao pode impedir
+      // que a rota apareca no historico.
+      await _saveRouteHistory(route, destination);
 
       try {
         final climatePoints = await _loadRouteClimate(route).timeout(
@@ -150,6 +185,36 @@ class _RoutePageState extends State<RoutePage> {
     }
   }
 
+  Future<void> _changeTransport(TransportType transport) async {
+    if (_selectedTransport == transport || _isLoading) return;
+    setState(() => _selectedTransport = transport);
+    if (_destination != null || _destinationController.text.trim().isNotEmpty) {
+      await _buildRoute();
+    }
+  }
+
+  Future<void> _saveRouteHistory(RouteResult route, RouteDestination destination) async {
+    try {
+      final climate = _climatePoints.isEmpty
+          ? null
+          : _climatePoints[_climatePoints.length > 1 ? 1 : 0];
+      await RouteHistoryRepository.save(
+        RouteHistoryEntry(
+          destination: destination.name,
+          transport: _selectedTransport.label,
+          distanceMeters: route.distanceMeters,
+          durationSeconds: route.durationSeconds,
+          createdAt: DateTime.now(),
+          latitude: destination.location.latitude,
+          longitude: destination.location.longitude,
+          rainChance: climate?.weather.rainChance,
+        ),
+      );
+    } catch (_) {
+      // Uma falha no cache local nao impede a rota de funcionar.
+    }
+  }
+
   void _fitRoute(RouteResult route) {
     _mapController.fitCamera(
       CameraFit.coordinates(
@@ -161,7 +226,11 @@ class _RoutePageState extends State<RoutePage> {
   }
 
   Future<List<_RouteClimatePoint>> _loadRouteClimate(RouteResult route) async {
-    const sampleCount = 5;
+    // Rotas curtas recebem poucos pontos; em viagens longas, aumentamos os
+    // pontos de previsao pelo espaco e pelo tempo de viagem.
+    final byDistance = (route.distanceMeters / 10000).ceil() + 1;
+    final byDuration = (route.durationSeconds / (20 * 60)).ceil() + 1;
+    final sampleCount = math.max(3, math.max(byDistance, byDuration)).clamp(3, 10).toInt();
     final now = DateTime.now();
     final samples = <({int index, LatLng location, DateTime arrivalAt})>[];
     for (var sample = 0; sample < sampleCount; sample++) {
@@ -288,7 +357,7 @@ class _RoutePageState extends State<RoutePage> {
           controller: _destinationController,
           textInputAction: TextInputAction.search,
           onChanged: (_) {
-            if (_destination?.name == 'Ponto selecionado no mapa') {
+            if (_destination?.isMapSelection == true) {
               setState(() => _destination = null);
             }
           },
@@ -298,8 +367,8 @@ class _RoutePageState extends State<RoutePage> {
             prefixIcon: const Icon(Icons.search),
             suffixIcon: IconButton(
               onPressed: _isLoading ? null : _buildRoute,
-              icon: const Icon(Icons.arrow_forward),
-              tooltip: 'Calcular rota',
+              icon: const Icon(Icons.send),
+              tooltip: 'Definir rota',
             ),
             filled: true,
             fillColor: Colors.white,
@@ -330,7 +399,7 @@ class _RoutePageState extends State<RoutePage> {
         const SizedBox(height: 14),
         TransportSelector(
           selected: _selectedTransport,
-          onSelected: (transport) => setState(() => _selectedTransport = transport),
+          onSelected: (transport) => _changeTransport(transport),
         ),
         const SizedBox(height: 12),
         _RouteFilterSelector(
@@ -752,19 +821,21 @@ class _ActiveNavigationMapPageState extends State<_ActiveNavigationMapPage> {
             minimum: const EdgeInsets.fromLTRB(14, 12, 14, 14),
             child: Stack(
               children: [
-            Align(
-              alignment: Alignment.topCenter,
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
               child: _navigationHeader(destinationName, remainingMinutes),
             ),
-            Align(
-              alignment: Alignment.bottomRight,
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: 186),
-                child: _recenterButton(),
-              ),
+            Positioned(
+              right: 0,
+              bottom: 186,
+              child: _recenterButton(),
             ),
-            Align(
-              alignment: Alignment.bottomCenter,
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
               child: _navigationBottomPanel(progress, nextClimate),
             ),
               ],

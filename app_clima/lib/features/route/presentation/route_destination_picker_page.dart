@@ -80,28 +80,17 @@ class _RouteDestinationPickerPageState extends State<RouteDestinationPickerPage>
                               icon: const Icon(Icons.arrow_back),
                             ),
                             const Text(
-                              'Marque seu destino',
+                              'Toque no destino',
                               style: TextStyle(fontWeight: FontWeight.w800),
                             ),
                             const SizedBox(width: 12),
+                            if (_selectedLocation != null)
+                              FilledButton.icon(
+                                onPressed: () => Navigator.of(context).pop(_selectedLocation),
+                                icon: const Icon(Icons.check),
+                                label: const Text('Confirmar'),
+                              ),
                           ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.bottomCenter,
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _selectedLocation == null
-                            ? null
-                            : () => Navigator.of(context).pop(_selectedLocation),
-                        icon: const Icon(Icons.check),
-                        label: Text(
-                          _selectedLocation == null
-                              ? 'Toque no mapa para marcar o destino'
-                              : 'Usar este ponto como destino',
                         ),
                       ),
                     ),

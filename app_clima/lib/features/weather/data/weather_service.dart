@@ -37,7 +37,7 @@ class WeatherService {
   static String get _apiKey => dotenv.env['WEATHER_API_KEY'] ?? '';
 
   static Future<WeatherData> fetchForecast(LatLng location) async {
-    final data = await _fetchForecastJson(location);
+    final data = await _fetchForecastJson(location, days: 3);
     return _weatherFromJson(data);
   }
 
@@ -128,7 +128,13 @@ class WeatherService {
       feelsLike: (weatherSource['feelslike_c'] as num).toDouble(),
       condition: condition['text'] as String,
       windKph: (weatherSource['wind_kph'] as num).toDouble(),
+      windDirection: weatherSource['wind_dir']?.toString() ?? '--',
+      gustKph: (weatherSource['gust_kph'] as num?)?.toDouble() ?? 0,
       uv: (weatherSource['uv'] as num).toDouble(),
+      humidity: (weatherSource['humidity'] as num?)?.round() ?? 0,
+      pressureMb: (weatherSource['pressure_mb'] as num?)?.toDouble() ?? 0,
+      visibilityKm: (weatherSource['vis_km'] as num?)?.toDouble() ?? 0,
+      cloudCoverage: (weatherSource['cloud'] as num?)?.round() ?? 0,
       precipitationMm: (weatherSource['precip_mm'] as num).toDouble(),
       forecastPrecipitationMm:
           ((selectedHour ?? nextHour)['precip_mm'] as num).toDouble(),
@@ -139,6 +145,10 @@ class WeatherService {
       hours: nextHours.isEmpty
           ? hours.take(4).map((hour) => ForecastHour.fromJson(hour)).toList()
           : nextHours,
+      days: [
+        for (var index = 0; index < forecastDays.length; index++)
+          DailyForecast.fromJson(forecastDays[index], index),
+      ],
     );
   }
 }

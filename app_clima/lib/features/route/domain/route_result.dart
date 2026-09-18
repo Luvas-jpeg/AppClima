@@ -13,8 +13,13 @@ class RouteResult {
 }
 
 class RouteDestination {
-  const RouteDestination({required this.name, required this.location});
+  const RouteDestination({
+    required this.name,
+    required this.location,
+    this.isMapSelection = false,
+  });
 
   final String name;
   final LatLng location;
+  final bool isMapSelection;
 }

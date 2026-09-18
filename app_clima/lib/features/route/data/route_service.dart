@@ -37,6 +37,34 @@ class RouteService {
     );
   }
 
+  static Future<RouteDestination> reverseGeocode(LatLng location) async {
+    _checkKey();
+    final uri = Uri.https(_host, '/geocode/reverse', {
+      'point.lon': location.longitude.toString(),
+      'point.lat': location.latitude.toString(),
+      'size': '1',
+    });
+    final response = await http
+        .get(uri, headers: {'Authorization': _apiKey})
+        .timeout(const Duration(seconds: 15));
+    final data = _decodeResponse(response.body);
+    if (response.statusCode != 200) {
+      throw Exception(_errorMessage(response, data));
+    }
+    final features = data['features'] as List? ?? const [];
+    if (features.isEmpty) {
+      throw Exception('Nao foi encontrado endereco para este ponto.');
+    }
+    final properties = (features.first as Map<String, dynamic>)['properties'] as Map<String, dynamic>;
+    final label = properties['label']?.toString();
+    final name = properties['name']?.toString();
+    return RouteDestination(
+      name: label?.isNotEmpty == true ? label! : (name?.isNotEmpty == true ? name! : 'Ponto selecionado no mapa'),
+      location: location,
+      isMapSelection: true,
+    );
+  }
+
   static Future<RouteResult> calculateRoute({
     required LatLng origin,
     required LatLng destination,

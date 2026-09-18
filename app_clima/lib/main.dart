@@ -9,7 +9,9 @@ import 'features/weather/data/weather_service.dart';
 import 'features/weather/domain/weather_data.dart';
 import 'core/widgets/app_widgets.dart';
 import 'features/history/presentation/history_page.dart';
+import 'features/history/domain/route_history_entry.dart';
 import 'features/route/presentation/route_page.dart';
+import 'features/route/domain/route_result.dart';
 
 Future<void> main() async {
   await dotenv.load(fileName: '.env');
@@ -28,15 +30,20 @@ class AppClimaApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF1565C0),
+      brightness: Brightness.light,
+    );
     return MaterialApp(
       title: 'AppClima',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1B7F8C),
-          brightness: Brightness.light,
+        colorScheme: scheme,
+        scaffoldBackgroundColor: const Color(0xFFF5F8FF),
+        navigationBarTheme: NavigationBarThemeData(
+          indicatorColor: scheme.primaryContainer,
+          backgroundColor: scheme.surface,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF4F7F8),
         useMaterial3: true,
       ),
       home: const HomeShell(),
@@ -53,11 +60,30 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int currentIndex = 0;
+  final _historyDestination = ValueNotifier<RouteDestination?>(null);
 
-  final pages = const [WeatherPage(), RoutePage(), HistoryPage()];
+  @override
+  void dispose() {
+    _historyDestination.dispose();
+    super.dispose();
+  }
+
+  void _useHistoryDestination(RouteHistoryEntry entry) {
+    _historyDestination.value = RouteDestination(
+      name: entry.destination,
+      location: LatLng(entry.latitude, entry.longitude),
+      isMapSelection: true,
+    );
+    setState(() => currentIndex = 1);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final pages = [
+      const WeatherPage(),
+      RoutePage(destinationNotifier: _historyDestination),
+      HistoryPage(onRouteSelected: _useHistoryDestination),
+    ];
     return Scaffold(
       body: SafeArea(child: pages[currentIndex]),
       bottomNavigationBar: NavigationBar(
@@ -96,7 +122,6 @@ class WeatherPage extends StatefulWidget {
 
 class _WeatherPageState extends State<WeatherPage> {
   static const fallbackLocation = LatLng(-23.5505, -46.6333);
-  final mapController = MapController();
   WeatherData? weather;
   LatLng? currentLocation;
   String? errorMessage;
@@ -122,8 +147,6 @@ class _WeatherPageState extends State<WeatherPage> {
       setState(() {
         currentLocation = location;
       });
-      mapController.move(location, 12.5);
-
       final result = await WeatherService.fetchForecast(location);
       if (!mounted) return;
       setState(() => weather = result);
@@ -136,12 +159,6 @@ class _WeatherPageState extends State<WeatherPage> {
   }
 
   @override
-  void dispose() {
-    mapController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(20),
@@ -151,26 +168,27 @@ class _WeatherPageState extends State<WeatherPage> {
           subtitle: weather?.locationName ?? 'Sua localizacao',
         ),
         const SizedBox(height: 18),
-        WeatherMapCard(
-          mapController: mapController,
-          location: currentLocation ?? fallbackLocation,
-          weather: weather,
-          isLoading: isLoading,
-          onLocate: _loadWeather,
-          onOpenMap: _openWeatherMap,
-        ),
+        CurrentWeatherCard(weather: weather),
         if (errorMessage != null) ...[
           const SizedBox(height: 12),
           WeatherErrorCard(message: errorMessage!),
         ],
         const SizedBox(height: 16),
-        CurrentWeatherCard(weather: weather),
+        FilledButton.icon(
+          onPressed: isLoading ? null : _openWeatherMap,
+          icon: const Icon(Icons.radar),
+          label: const Text('Ver radar do clima'),
+        ),
         const SizedBox(height: 16),
-        const SectionTitle('Proximas horas'),
+        const SectionTitle('Previsao para hoje'),
         const SizedBox(height: 12),
         HourlyForecastList(weather: weather),
         const SizedBox(height: 20),
-        const SectionTitle('Indicadores'),
+        const SectionTitle('Proximos dias'),
+        const SizedBox(height: 12),
+        DailyForecastList(weather: weather),
+        const SizedBox(height: 20),
+        const SectionTitle('Detalhes de hoje'),
         const SizedBox(height: 12),
         WeatherMetricGrid(weather: weather),
       ],
@@ -812,49 +830,126 @@ class CurrentWeatherCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final style = _WeatherCardStyle.fromCondition(weather?.condition);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 550),
+      curve: Curves.easeInOutCubic,
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        color: const Color(0xFF12343B),
-        borderRadius: BorderRadius.circular(8),
+        gradient: LinearGradient(
+          colors: style.colors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.wb_cloudy, color: Colors.white, size: 44),
-              const Spacer(),
-              Text(
-                weather == null ? '-- C' : '${weather!.temperature.round()} C',
-                style: const TextStyle(
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(weather?.condition ?? 'Carregando condicoes...', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Text(weather == null ? 'Atualizando sua previsao' : 'Sensacao de ${weather!.feelsLike.round()} C', style: const TextStyle(color: Color(0xFFE3F2FD))),
+                  ],
+                ),
+              ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Icon(
+                  style.icon,
+                  key: ValueKey(weather?.condition),
                   color: Colors.white,
-                  fontSize: 44,
-                  fontWeight: FontWeight.w700,
+                  size: 48,
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 20),
+          Text(weather == null ? '-- C' : '${weather!.temperature.round()} C', style: const TextStyle(color: Colors.white, fontSize: 52, fontWeight: FontWeight.w800, height: 1)),
           const SizedBox(height: 18),
-          Text(
-            weather?.condition ?? 'Carregando condicoes...',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            weather == null
-                ? 'Ative sua localizacao para ver os dados reais.'
-                : 'Precipitacao: ${weather!.precipitationMm.toStringAsFixed(1)} mm',
-            style: const TextStyle(color: Color(0xFFD7E6E8), fontSize: 15),
+          Row(
+            children: [
+              _WeatherHighlight(icon: Icons.water_drop_outlined, label: 'Chuva', value: weather == null ? '--' : '${weather!.rainChance}%'),
+              const SizedBox(width: 18),
+              _WeatherHighlight(icon: Icons.air, label: 'Vento', value: weather == null ? '--' : '${weather!.windKph.round()} km/h'),
+            ],
           ),
         ],
       ),
     );
   }
+}
+
+class _WeatherCardStyle {
+  const _WeatherCardStyle(this.colors, this.icon);
+  final List<Color> colors;
+  final IconData icon;
+
+  factory _WeatherCardStyle.fromCondition(String? condition) {
+    final text = (condition ?? '').toLowerCase();
+    if (text.contains('trovoada') || text.contains('tempestade')) {
+      return const _WeatherCardStyle(
+        [Color(0xFF1A237E), Color(0xFF4527A0), Color(0xFF5C6BC0)],
+        Icons.thunderstorm,
+      );
+    }
+    if (text.contains('chuva') || text.contains('garoa') || text.contains('chuvisco')) {
+      return const _WeatherCardStyle(
+        [Color(0xFF263238), Color(0xFF455A64), Color(0xFF607D8B)],
+        Icons.water_drop,
+      );
+    }
+    if (text.contains('nublado') || text.contains('encoberto')) {
+      return const _WeatherCardStyle(
+        [Color(0xFF37474F), Color(0xFF546E7A), Color(0xFF78909C)],
+        Icons.cloud,
+      );
+    }
+    if (text.contains('nevoeiro') || text.contains('neblina') || text.contains('névoa')) {
+      return const _WeatherCardStyle(
+        [Color(0xFF546E7A), Color(0xFF78909C), Color(0xFF90A4AE)],
+        Icons.foggy,
+      );
+    }
+    if (text.contains('sol') || text.contains('limpo') || text.contains('claro')) {
+      return const _WeatherCardStyle(
+        [Color(0xFFFF8F00), Color(0xFFFFB300), Color(0xFFFFCA28)],
+        Icons.wb_sunny,
+      );
+    }
+    return const _WeatherCardStyle(
+      [Color(0xFF0D47A1), Color(0xFF1976D2), Color(0xFF42A5F5)],
+      Icons.wb_cloudy_outlined,
+    );
+  }
+}
+
+class _WeatherHighlight extends StatelessWidget {
+  const _WeatherHighlight({required this.icon, required this.label, required this.value});
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Icon(icon, color: const Color(0xFFE3F2FD), size: 19),
+          const SizedBox(width: 6),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Color(0xFFE3F2FD), fontSize: 12)),
+              Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+            ],
+          ),
+        ],
+      );
+
 }
 
 class HourlyForecastList extends StatelessWidget {
@@ -903,39 +998,71 @@ class HourlyForecastList extends StatelessWidget {
   }
 }
 
+class DailyForecastList extends StatelessWidget {
+  const DailyForecastList({required this.weather, super.key});
+  final WeatherData? weather;
+
+  @override
+  Widget build(BuildContext context) {
+    final days = weather?.days ?? const <DailyForecast>[];
+    if (days.isEmpty) {
+      return const InfoCard(child: Text('Carregando previsao dos proximos dias...'));
+    }
+    return Column(
+      children: [
+        for (final day in days)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: InfoCard(
+              child: Row(
+                children: [
+                  SizedBox(width: 48, child: Text(day.day, style: const TextStyle(fontWeight: FontWeight.w800))),
+                  Icon(day.icon, color: const Color(0xFF1565C0)),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text('${day.rainChance} de chuva · ${day.precipitationMm}', style: const TextStyle(color: Color(0xFF5A6B70)))),
+                  Text('${day.minTemperature}  ${day.maxTemperature}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class WeatherMetricGrid extends StatelessWidget {
   const WeatherMetricGrid({required this.weather, super.key});
 
   final WeatherData? weather;
 
   @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        MetricTile(
-          icon: Icons.water_drop,
-          label: 'Chuva',
-          value: weather == null ? '--' : '${weather!.rainChance}%',
-        ),
-        MetricTile(
-          icon: Icons.air,
-          label: 'Vento',
-          value: weather == null ? '--' : '${weather!.windKph.round()} km/h',
-        ),
-        MetricTile(
-          icon: Icons.wb_sunny,
-          label: 'UV',
-          value: weather == null ? '--' : weather!.uv.toStringAsFixed(1),
-        ),
-        MetricTile(
-          icon: Icons.device_thermostat,
-          label: 'Sensacao',
-          value: weather == null ? '--' : '${weather!.feelsLike.round()} C',
-        ),
-      ],
-    );
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          final width = (constraints.maxWidth - 12) / 2;
+          final data = weather;
+          return Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              MetricTile(width: width, icon: Icons.water_drop, label: 'Chuva prevista', value: data == null ? '--' : '${data.rainChance}%\n${data.forecastPrecipitationMm.toStringAsFixed(1)} mm'),
+              MetricTile(width: width, icon: Icons.air, label: 'Vento', value: data == null ? '--' : '${data.windKph.round()} km/h\n${data.windDirection}'),
+              MetricTile(width: width, icon: Icons.speed, label: 'Rajadas', value: data == null ? '--' : '${data.gustKph.round()} km/h'),
+              MetricTile(width: width, icon: Icons.wb_sunny, label: 'Radiacao UV', value: data == null ? '--' : '${data.uv.toStringAsFixed(1)} · ${_uvLabel(data.uv)}'),
+              MetricTile(width: width, icon: Icons.water, label: 'Umidade', value: data == null ? '--' : '${data.humidity}%'),
+              MetricTile(width: width, icon: Icons.visibility, label: 'Visibilidade', value: data == null ? '--' : '${data.visibilityKm.toStringAsFixed(1)} km'),
+              MetricTile(width: width, icon: Icons.compress, label: 'Pressao', value: data == null ? '--' : '${data.pressureMb.round()} mb'),
+              MetricTile(width: width, icon: Icons.cloud_outlined, label: 'Nuvens', value: data == null ? '--' : '${data.cloudCoverage}%'),
+            ],
+          );
+        },
+      );
+
+  String _uvLabel(double value) {
+    if (value < 3) return 'baixo';
+    if (value < 6) return 'moderado';
+    if (value < 8) return 'alto';
+    if (value < 11) return 'muito alto';
+    return 'extremo';
   }
 }
 
