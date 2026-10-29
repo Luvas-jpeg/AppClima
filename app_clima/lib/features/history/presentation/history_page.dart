@@ -35,8 +35,8 @@ class _HistoryPageState extends State<HistoryPage> {
             children: [
               const Expanded(
                 child: PageHeader(
-                  title: 'Historico',
-                  subtitle: 'Rotas salvas neste aparelho',
+                  title: 'Histórico',
+                  subtitle: 'Seus caminhos, prontos para uma nova viagem',
                 ),
               ),
               if (entries.isNotEmpty)

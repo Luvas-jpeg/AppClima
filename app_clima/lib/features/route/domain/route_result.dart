@@ -17,9 +17,13 @@ class RouteDestination {
     required this.name,
     required this.location,
     this.isMapSelection = false,
+    this.requiresMapConfirmation = false,
+    this.requiresPreciseMapSelection = false,
   });
 
   final String name;
   final LatLng location;
   final bool isMapSelection;
+  final bool requiresMapConfirmation;
+  final bool requiresPreciseMapSelection;
 }

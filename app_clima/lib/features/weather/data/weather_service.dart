@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:geolocator/geolocator.dart';
@@ -28,7 +29,8 @@ class LocationService {
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
     ).timeout(
       const Duration(seconds: 15),
-      onTimeout: () => throw Exception('O GPS demorou para responder. Tente novamente.'),
+      onTimeout: () =>
+          throw Exception('O GPS demorou para responder. Tente novamente.'),
     );
   }
 }
@@ -65,7 +67,16 @@ class WeatherService {
       'alerts': 'no',
       'lang': 'pt',
     });
-    final response = await http.get(uri).timeout(const Duration(seconds: 15));
+    final http.Response response;
+    try {
+      response = await http.get(uri).timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      throw Exception('A WeatherAPI demorou para responder. Tente novamente.');
+    } catch (_) {
+      throw Exception(
+        'Não foi possível conectar à WeatherAPI. Verifique a internet.',
+      );
+    }
     final data = jsonDecode(response.body) as Map<String, dynamic>;
 
     if (response.statusCode != 200) {
@@ -91,7 +102,9 @@ class WeatherService {
     final forecastDay = forecastDays.first;
     final hours = forecastDay['hour'] as List<dynamic>;
     final allHours = forecastDays
-        .expand((day) => (day['hour'] as List<dynamic>).cast<Map<String, dynamic>>())
+        .expand(
+          (day) => (day['hour'] as List<dynamic>).cast<Map<String, dynamic>>(),
+        )
         .toList();
     final now = DateTime.now();
     final nextHours = hours
@@ -116,13 +129,22 @@ class WeatherService {
             final closestTime = DateTime.parse(closest['time'] as String);
             final candidateTime = DateTime.parse(candidate['time'] as String);
             final closestDistance = closestTime.difference(forecastAt).abs();
-            final candidateDistance = candidateTime.difference(forecastAt).abs();
+            final candidateDistance = candidateTime
+                .difference(forecastAt)
+                .abs();
             return candidateDistance < closestDistance ? candidate : closest;
           });
     final weatherSource = selectedHour ?? current;
     final condition = weatherSource['condition'] as Map<String, dynamic>;
 
+    final sourceEpoch = current['last_updated_epoch'] as num?;
     return WeatherData(
+      sourceUpdatedAt: forecastAt == null && sourceEpoch != null
+          ? DateTime.fromMillisecondsSinceEpoch(
+              sourceEpoch.toInt() * 1000,
+              isUtc: true,
+            ).toLocal()
+          : null,
       locationName: '${location['name']}, ${location['region']}',
       temperature: (weatherSource['temp_c'] as num).toDouble(),
       feelsLike: (weatherSource['feelslike_c'] as num).toDouble(),
@@ -136,9 +158,10 @@ class WeatherService {
       visibilityKm: (weatherSource['vis_km'] as num?)?.toDouble() ?? 0,
       cloudCoverage: (weatherSource['cloud'] as num?)?.round() ?? 0,
       precipitationMm: (weatherSource['precip_mm'] as num).toDouble(),
-      forecastPrecipitationMm:
-          ((selectedHour ?? nextHour)['precip_mm'] as num).toDouble(),
-      rainChance: int.tryParse(
+      forecastPrecipitationMm: ((selectedHour ?? nextHour)['precip_mm'] as num)
+          .toDouble(),
+      rainChance:
+          int.tryParse(
             (selectedHour ?? nextHour)['chance_of_rain'].toString(),
           ) ??
           0,

@@ -3,10 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 
 import 'features/weather/data/weather_service.dart';
+import 'features/weather/data/weather_city_service.dart';
+import 'features/weather/domain/weather_city.dart';
+import 'features/route/presentation/geoapify_attribution.dart';
 import 'features/weather/domain/weather_data.dart';
+import 'features/weather/presentation/weather_map_marker.dart';
 import 'core/widgets/app_widgets.dart';
 import 'features/history/presentation/history_page.dart';
 import 'features/history/domain/route_history_entry.dart';
@@ -17,8 +22,8 @@ Future<void> main() async {
   await dotenv.load(fileName: '.env');
   assert(() {
     debugPrint(
-      "Configuracao de APIs: WeatherAPI=${dotenv.env['WEATHER_API_KEY']?.isNotEmpty == true}, "
-      "OpenRouteService=${dotenv.env['ORS_API_KEY']?.isNotEmpty == true}",
+      "Configuracao de APIs: WeatherAPI=${dotenv.env['WEATHER_API_KEY']?.isNotEmpty == true}"
+      "Geoapify=${dotenv.env['GEOAPIFY_API_KEY']?.isNotEmpty == true}",
     );
     return true;
   }());
@@ -31,7 +36,7 @@ class AppClimaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF1565C0),
+      seedColor: const Color(0xFF087F8C),
       brightness: Brightness.light,
     );
     return MaterialApp(
@@ -40,9 +45,41 @@ class AppClimaApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: scheme,
         scaffoldBackgroundColor: const Color(0xFFF5F8FF),
-        navigationBarTheme: NavigationBarThemeData(
-          indicatorColor: scheme.primaryContainer,
-          backgroundColor: scheme.surface,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFFF5F8FF),
+          foregroundColor: Color(0xFF12343B),
+          elevation: 0,
+          centerTitle: false,
+          titleTextStyle: TextStyle(
+            fontSize: 19,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF12343B),
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(48, 52),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding: const EdgeInsets.all(18),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: const BorderSide(color: Color(0xFFE1EAEC)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: const BorderSide(color: Color(0xFFE1EAEC)),
+          ),
         ),
         useMaterial3: true,
       ),
@@ -51,70 +88,86 @@ class AppClimaApp extends StatelessWidget {
   }
 }
 
-class HomeShell extends StatefulWidget {
+class HomeShell extends StatelessWidget {
   const HomeShell({super.key});
 
-  @override
-  State<HomeShell> createState() => _HomeShellState();
-}
-
-class _HomeShellState extends State<HomeShell> {
-  int currentIndex = 0;
-  final _historyDestination = ValueNotifier<RouteDestination?>(null);
-
-  @override
-  void dispose() {
-    _historyDestination.dispose();
-    super.dispose();
-  }
-
-  void _useHistoryDestination(RouteHistoryEntry entry) {
-    _historyDestination.value = RouteDestination(
-      name: entry.destination,
-      location: LatLng(entry.latitude, entry.longitude),
-      isMapSelection: true,
-    );
-    setState(() => currentIndex = 1);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final pages = [
-      const WeatherPage(),
-      RoutePage(destinationNotifier: _historyDestination),
-      HistoryPage(onRouteSelected: _useHistoryDestination),
-    ];
-    return Scaffold(
-      body: SafeArea(child: pages[currentIndex]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: currentIndex,
-        onDestinationSelected: (index) {
-          setState(() => currentIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.cloud_outlined),
-            selectedIcon: Icon(Icons.cloud),
-            label: 'Clima',
+  void _openRoute(BuildContext context, {RouteHistoryEntry? entry}) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Planejar viagem')),
+          body: SafeArea(
+            child: RoutePage(
+              initialDestination: entry == null
+                  ? null
+                  : RouteDestination(
+                      name: entry.destination,
+                      location: LatLng(entry.latitude, entry.longitude),
+                      isMapSelection: true,
+                    ),
+            ),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.route_outlined),
-            selectedIcon: Icon(Icons.route),
-            label: 'Rota',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history_outlined),
-            selectedIcon: Icon(Icons.history),
-            label: 'Historico',
-          ),
-        ],
+        ),
       ),
     );
   }
+
+  Future<void> _openHistory(BuildContext context) async {
+    final entry = await Navigator.of(context).push<RouteHistoryEntry>(
+      MaterialPageRoute(
+        builder: (pageContext) => Scaffold(
+          appBar: AppBar(title: const Text('Suas viagens')),
+          body: SafeArea(
+            child: HistoryPage(
+              onRouteSelected: (entry) => Navigator.of(pageContext).pop(entry),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (entry != null && context.mounted) _openRoute(context, entry: entry);
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Row(
+        children: [
+          Icon(Icons.explore, color: Color(0xFF087F8C)),
+          SizedBox(width: 10),
+          Text('AppClima'),
+        ],
+      ),
+      actions: [
+        IconButton(
+          tooltip: 'Histórico de viagens',
+          onPressed: () => _openHistory(context),
+          icon: const Icon(Icons.history_rounded),
+        ),
+        const SizedBox(width: 8),
+      ],
+    ),
+    body: SafeArea(
+      child: WeatherPage(
+        onPlanRoute: () => _openRoute(context),
+        onHistory: () => _openHistory(context),
+      ),
+    ),
+  );
 }
 
 class WeatherPage extends StatefulWidget {
-  const WeatherPage({super.key});
+  const WeatherPage({
+    this.onPlanRoute,
+    this.onHistory,
+    this.locationProvider,
+    this.forecastLoader,
+    super.key,
+  });
+  final VoidCallback? onPlanRoute;
+  final VoidCallback? onHistory;
+  final Future<Position> Function()? locationProvider;
+  final Future<WeatherData> Function(LatLng)? forecastLoader;
 
   @override
   State<WeatherPage> createState() => _WeatherPageState();
@@ -126,6 +179,8 @@ class _WeatherPageState extends State<WeatherPage> {
   LatLng? currentLocation;
   String? errorMessage;
   bool isLoading = false;
+  DateTime? lastRefreshAt;
+  Future<void>? _weatherRequest;
 
   @override
   void initState() {
@@ -134,25 +189,47 @@ class _WeatherPageState extends State<WeatherPage> {
   }
 
   Future<void> _loadWeather() async {
+    final pending = _weatherRequest;
+    if (pending != null) return pending;
+    final request = _fetchWeather();
+    _weatherRequest = request;
+    try {
+      await request;
+    } finally {
+      if (identical(_weatherRequest, request)) _weatherRequest = null;
+    }
+  }
+
+  Future<void> _fetchWeather() async {
+    if (!mounted) return;
     setState(() {
       isLoading = true;
       errorMessage = null;
     });
 
     try {
-      final position = await LocationService.currentPosition();
+      final position =
+          await (widget.locationProvider ?? LocationService.currentPosition)();
       final location = LatLng(position.latitude, position.longitude);
 
       if (!mounted) return;
-      setState(() {
-        currentLocation = location;
-      });
-      final result = await WeatherService.fetchForecast(location);
+      final result =
+          await (widget.forecastLoader ?? WeatherService.fetchForecast)(
+            location,
+          );
       if (!mounted) return;
-      setState(() => weather = result);
+      setState(() {
+        weather = result;
+        currentLocation = location;
+        lastRefreshAt = DateTime.now();
+      });
     } catch (error) {
       if (!mounted) return;
-      setState(() => errorMessage = error.toString());
+      setState(
+        () => errorMessage = weather == null
+            ? error.toString().replaceFirst('Exception: ', '')
+            : 'Não foi possível atualizar. Os últimos dados foram mantidos.\n${error.toString().replaceFirst('Exception: ', '')}',
+      );
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -160,40 +237,107 @@ class _WeatherPageState extends State<WeatherPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        PageHeader(
-          title: 'Clima agora',
-          subtitle: weather?.locationName ?? 'Sua localizacao',
-        ),
-        const SizedBox(height: 18),
-        CurrentWeatherCard(weather: weather),
-        if (errorMessage != null) ...[
+    return RefreshIndicator(
+      onRefresh: _loadWeather,
+      child: ListView(
+        key: const ValueKey('weather-home-list'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(20),
+        children: [
+          PageHeader(
+            title: 'Clima agora',
+            subtitle: weather?.locationName ?? 'O tempo no seu próximo caminho',
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Puxe para baixo para atualizar',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF5A6B70)),
+                    ),
+                    if (lastRefreshAt != null)
+                      Text(
+                        'Consulta atualizada às ${_clock(lastRefreshAt!)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF5A6B70),
+                        ),
+                      ),
+                    if (weather?.sourceUpdatedAt != null)
+                      Text(
+                        'Dados da WeatherAPI: ${_sourceTime(weather!.sourceUpdatedAt!)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF5A6B70),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Atualizar clima',
+                onPressed: isLoading ? null : _loadWeather,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          CurrentWeatherCard(weather: weather),
+          if (errorMessage != null) ...[
+            const SizedBox(height: 12),
+            WeatherErrorCard(message: errorMessage!),
+          ],
+          const SizedBox(height: 24),
+          if (widget.onPlanRoute != null) ...[
+            JourneyActionCard(
+              title: 'Planejar rota',
+              description: 'Descubra como estará o tempo no caminho.',
+              icon: Icons.route_rounded,
+              onTap: widget.onPlanRoute!,
+              primary: true,
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (widget.onHistory != null) ...[
+            JourneyActionCard(
+              title: 'Histórico',
+              description: 'Retome um destino das suas últimas viagens.',
+              icon: Icons.history_rounded,
+              onTap: widget.onHistory!,
+            ),
+            const SizedBox(height: 12),
+          ],
+          OutlinedButton.icon(
+            onPressed: isLoading ? null : _openWeatherMap,
+            icon: const Icon(Icons.radar),
+            label: const Text('Explorar mapa do clima'),
+          ),
+          const SizedBox(height: 16),
+          const SectionTitle('Nas próximas horas'),
           const SizedBox(height: 12),
-          WeatherErrorCard(message: errorMessage!),
+          HourlyForecastList(weather: weather),
+          const SizedBox(height: 20),
+          const SectionTitle('Próximos dias'),
+          const SizedBox(height: 12),
+          DailyForecastList(weather: weather),
+          const SizedBox(height: 20),
+          const SectionTitle('Detalhes de hoje'),
+          const SizedBox(height: 12),
+          WeatherMetricGrid(weather: weather),
         ],
-        const SizedBox(height: 16),
-        FilledButton.icon(
-          onPressed: isLoading ? null : _openWeatherMap,
-          icon: const Icon(Icons.radar),
-          label: const Text('Ver radar do clima'),
-        ),
-        const SizedBox(height: 16),
-        const SectionTitle('Previsao para hoje'),
-        const SizedBox(height: 12),
-        HourlyForecastList(weather: weather),
-        const SizedBox(height: 20),
-        const SectionTitle('Proximos dias'),
-        const SizedBox(height: 12),
-        DailyForecastList(weather: weather),
-        const SizedBox(height: 20),
-        const SectionTitle('Detalhes de hoje'),
-        const SizedBox(height: 12),
-        WeatherMetricGrid(weather: weather),
-      ],
+      ),
     );
   }
+
+  String _clock(DateTime time) =>
+      '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+  String _sourceTime(DateTime time) =>
+      '${time.day.toString().padLeft(2, '0')}/${time.month.toString().padLeft(2, '0')} às ${_clock(time)}';
 
   void _openWeatherMap() {
     Navigator.of(context).push(
@@ -338,11 +482,15 @@ class WeatherMapPage extends StatefulWidget {
   const WeatherMapPage({
     required this.userLocation,
     required this.currentWeather,
+    this.forecastLoader,
+    this.cityLoader,
     super.key,
   });
 
   final LatLng userLocation;
   final WeatherData? currentWeather;
+  final Future<WeatherData> Function(LatLng)? forecastLoader;
+  final Future<List<WeatherCity>> Function(LatLngBounds)? cityLoader;
 
   @override
   State<WeatherMapPage> createState() => _WeatherMapPageState();
@@ -350,7 +498,7 @@ class WeatherMapPage extends StatefulWidget {
 
 class _WeatherMapPageState extends State<WeatherMapPage> {
   final mapController = MapController();
-  WeatherMapFilter selectedFilter = WeatherMapFilter.rain;
+  WeatherMapFilter selectedFilter = WeatherMapFilter.temperature;
   MapBaseStyle selectedMapStyle = MapBaseStyle.light;
   List<WeatherPoint> points = [];
   String? errorMessage;
@@ -358,6 +506,27 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   late LatLng mapCenter;
   Timer? updateTimer;
   bool mapReady = false;
+  int _weatherRequest = 0;
+  final _cities = WeatherCityService();
+  final _forecastCache =
+      <String, ({DateTime createdAt, Future<WeatherData> forecast})>{};
+
+  Future<WeatherData> _cityForecast(WeatherCity city) {
+    final cached = _forecastCache[city.id];
+    if (cached != null &&
+        DateTime.now().difference(cached.createdAt) <
+            const Duration(minutes: 15)) {
+      return cached.forecast;
+    }
+    if (_forecastCache.length >= 64) {
+      _forecastCache.remove(_forecastCache.keys.first);
+    }
+    final forecast = (widget.forecastLoader ?? WeatherService.fetchForecast)(
+      city.location,
+    );
+    _forecastCache[city.id] = (createdAt: DateTime.now(), forecast: forecast);
+    return forecast;
+  }
 
   @override
   void initState() {
@@ -366,6 +535,7 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   }
 
   Future<void> _loadNearbyWeather() async {
+    final request = ++_weatherRequest;
     setState(() {
       isLoading = true;
       errorMessage = null;
@@ -377,47 +547,41 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
             LatLng(mapCenter.latitude - 0.05, mapCenter.longitude - 0.05),
             LatLng(mapCenter.latitude + 0.05, mapCenter.longitude + 0.05),
           );
-    const divisions = 2;
-    const edgeMargin = 0.25;
-    final nearbyLocations = [
-      for (var latitudeIndex = 0; latitudeIndex <= divisions; latitudeIndex++)
-        for (
-          var longitudeIndex = 0;
-          longitudeIndex <= divisions;
-          longitudeIndex++
-        )
-          LatLng(
-            bounds.south +
-                ((bounds.north - bounds.south) *
-                    (edgeMargin +
-                        ((1 - (2 * edgeMargin)) * latitudeIndex / divisions))),
-            bounds.west +
-                ((bounds.east - bounds.west) *
-                    (edgeMargin +
-                        ((1 - (2 * edgeMargin)) * longitudeIndex / divisions))),
-          ),
-    ];
-
     try {
-      final nearbyData = await Future.wait(
-        nearbyLocations.map(WeatherService.fetchForecast),
+      final cities = await (widget.cityLoader ?? _cities.findCities)(bounds);
+      if (!mounted || request != _weatherRequest) return;
+      var failures = 0;
+      final loaded = await Future.wait(
+        cities.map((city) async {
+          try {
+            final weather = await _cityForecast(city);
+            return WeatherPoint(city.location, weather, cityName: city.name);
+          } catch (_) {
+            _forecastCache.remove(city.id);
+            failures++;
+            return null;
+          }
+        }),
       );
-      final loadedPoints = [
-        for (var index = 0; index < nearbyData.length; index++)
-          WeatherPoint(nearbyLocations[index], nearbyData[index]),
-      ];
-
-      if (!mounted) return;
+      final loadedPoints = loaded.whereType<WeatherPoint>().toList();
+      if (!mounted || request != _weatherRequest) return;
       setState(() {
         points = loadedPoints;
+        errorMessage = failures > 0
+            ? 'Não foi possível carregar o clima de ${failures == 1 ? 'uma cidade' : 'algumas cidades'}. Tente novamente.'
+            : cities.isEmpty
+            ? 'Nenhuma cidade encontrada nesta área. Afaste o zoom ou mova o mapa.'
+            : null;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || request != _weatherRequest) return;
       setState(
-        () => errorMessage = 'Nao foi possivel carregar os pontos do mapa.',
+        () => errorMessage = error.toString().replaceFirst('Exception: ', ''),
       );
     } finally {
-      if (mounted) setState(() => isLoading = false);
+      if (mounted && request == _weatherRequest) {
+        setState(() => isLoading = false);
+      }
     }
   }
 
@@ -425,19 +589,12 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   void dispose() {
     updateTimer?.cancel();
     mapController.dispose();
+    _cities.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final visiblePoints = points.where((point) {
-      return selectedFilter != WeatherMapFilter.rain ||
-          point.weather.rainChance > 0;
-    });
-    final centralWeather = points.length >= 5
-        ? points[4].weather
-        : widget.currentWeather;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Mapa do clima'),
@@ -466,35 +623,89 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
           ),
         ],
       ),
-      body: Stack(
+      body: Column(
         children: [
-          ColorFiltered(
-            colorFilter: selectedMapStyle.colorFilter,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Material(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              elevation: 3,
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(selectedFilter.icon, color: selectedFilter.color),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            selectedFilter == WeatherMapFilter.rain
+                                ? 'Chuva · próxima hora'
+                                : '${selectedFilter.label} · agora',
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        if (isLoading)
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Clima por cidade. Toque no nome para ver os detalhes e as próximas horas.',
+                      style: TextStyle(color: Color(0xFF5A6B70), fontSize: 12),
+                    ),
+                    if (errorMessage != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        errorMessage!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: isLoading ? null : _loadNearbyWeather,
+                        child: const Text('Tentar novamente'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Expanded(
             child: FlutterMap(
               mapController: mapController,
               options: MapOptions(
                 initialCenter: widget.userLocation,
-                initialZoom: 11.5,
+                initialZoom: 10,
                 onMapReady: () {
                   setState(() => mapReady = true);
                   _loadNearbyWeather();
                 },
                 onPositionChanged: (camera, hasGesture) {
                   if (!hasGesture) return;
-                  setState(() {
-                    mapCenter = camera.center;
-                  });
+                  mapCenter = camera.center;
                   _scheduleAreaUpdate();
                 },
               ),
               children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.app_clima',
+                ColorFiltered(
+                  colorFilter: selectedMapStyle.colorFilter,
+                  child: TileLayer(
+                    urlTemplate:
+                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.example.app_clima',
+                  ),
                 ),
-                const SimpleAttributionWidget(
-                  source: Text('OpenStreetMap contributors'),
-                ),
+                WeatherPointMarkerLayer(points: points, filter: selectedFilter),
                 MarkerLayer(
                   markers: [
                     Marker(
@@ -504,7 +715,7 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                       child: const Icon(
                         Icons.my_location,
                         color: Color(0xFF12343B),
-                        size: 32,
+                        size: 30,
                       ),
                     ),
                   ],
@@ -512,56 +723,10 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
               ],
             ),
           ),
-          if (mapReady)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: CustomPaint(
-                  painter: ThermalMapPainter(
-                    camera: mapController.camera,
-                    filter: selectedFilter,
-                    points: visiblePoints.toList(),
-                  ),
-                ),
-              ),
-            ),
-          if (isLoading) const Center(child: CircularProgressIndicator()),
-          if (centralWeather != null)
-            Positioned(
-              top: 14,
-              left: 14,
-              right: 14,
-              child: WeatherMapSummary(weather: centralWeather),
-            ),
-          if (errorMessage != null)
-            Positioned(
-              top: centralWeather == null ? 18 : 98,
-              left: 18,
-              right: 18,
-              child: WeatherErrorCard(message: errorMessage!),
-            ),
-          Positioned(
-            top: centralWeather == null ? 18 : 98,
-            left: 18,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.92),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                child: Text(
-                  '${selectedFilter.label}: cor mais forte = valor maior',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
+          Padding(
+            padding: EdgeInsets.zero,
             child: SafeArea(
+              top: false,
               minimum: const EdgeInsets.all(16),
               child: DecoratedBox(
                 decoration: BoxDecoration(
@@ -573,23 +738,30 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(10),
-                  child: Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: WeatherMapFilter.values.map((filter) {
-                      return ChoiceChip(
-                        selected: selectedFilter == filter,
-                        avatar: Icon(
-                          filter.icon,
-                          size: 18,
-                          color: filter.color,
-                        ),
-                        label: Text(filter.label),
-                        onSelected: (_) =>
-                            setState(() => selectedFilter = filter),
-                      );
-                    }).toList(),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: WeatherMapFilter.values.map((filter) {
+                          return ChoiceChip(
+                            selected: selectedFilter == filter,
+                            avatar: Icon(
+                              filter.icon,
+                              size: 18,
+                              color: filter.color,
+                            ),
+                            label: Text(filter.label),
+                            onSelected: (_) =>
+                                setState(() => selectedFilter = filter),
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 6),
+                      const GeoapifyAttribution(),
+                    ],
                   ),
                 ),
               ),
@@ -603,89 +775,82 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   void _scheduleAreaUpdate() {
     updateTimer?.cancel();
     updateTimer = Timer(const Duration(milliseconds: 900), () {
-      if (mounted && !isLoading) {
+      if (mounted) {
         _loadNearbyWeather();
       }
     });
   }
 }
 
-class WeatherRegionStyle {
-  static double intensityFor(WeatherMapFilter filter, WeatherData weather) {
-    return switch (filter) {
-      WeatherMapFilter.rain => weather.rainChance / 100,
-      WeatherMapFilter.wind =>
-        (weather.windKph / 45).clamp(0.2, 1.0).toDouble(),
-      WeatherMapFilter.temperature =>
-        (weather.temperature / 40).clamp(0.2, 1.0).toDouble(),
-      WeatherMapFilter.uv => (weather.uv / 11).clamp(0.2, 1.0).toDouble(),
-    };
-  }
-}
-
-class ThermalMapPainter extends CustomPainter {
-  const ThermalMapPainter({
-    required this.camera,
-    required this.filter,
+class WeatherPointMarkerLayer extends StatelessWidget {
+  const WeatherPointMarkerLayer({
     required this.points,
+    required this.filter,
+    super.key,
   });
-
-  final MapCamera camera;
-  final WeatherMapFilter filter;
   final List<WeatherPoint> points;
+  final WeatherMapFilter filter;
+
+  String _value(WeatherData weather) => switch (filter) {
+    WeatherMapFilter.rain => '${weather.rainChance}%',
+    WeatherMapFilter.temperature => '${weather.temperature.round()}°C',
+    WeatherMapFilter.wind => '${weather.windKph.round()} km/h',
+    WeatherMapFilter.uv => 'UV ${weather.uv.toStringAsFixed(1)}',
+  };
 
   @override
-  void paint(Canvas canvas, Size size) {
+  Widget build(BuildContext context) {
+    final camera = MapCamera.of(context);
+    final scale = (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(
+      1.0,
+      double.infinity,
+    );
+    final width = 154 * scale;
+    final height = 76 * scale;
+    final occupied = <Rect>[];
+    final markers = <Marker>[];
     for (final point in points) {
-      final intensity = WeatherRegionStyle.intensityFor(filter, point.weather);
-      final center = camera.latLngToScreenOffset(point.location);
-      final radius = 135 + (135 * intensity);
-      final centerOpacity = 0.10 + (0.26 * intensity);
-      final rect = Rect.fromCircle(center: center, radius: radius);
-      final paint = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            filter.color.withValues(alpha: centerOpacity),
-            filter.color.withValues(alpha: centerOpacity * 0.42),
-            filter.color.withValues(alpha: 0),
-          ],
-          stops: const [0.0, 0.45, 1.0],
-        ).createShader(rect);
-      canvas.drawCircle(center, radius, paint);
-
-      final label = switch (filter) {
-        WeatherMapFilter.rain =>
-          '${point.weather.rainChance}%\n${point.weather.forecastPrecipitationMm.toStringAsFixed(1)} mm',
-        WeatherMapFilter.wind => '${point.weather.windKph.round()} km/h',
-        WeatherMapFilter.temperature =>
-          '${point.weather.temperature.round()} C\nS ${point.weather.feelsLike.round()} C',
-        WeatherMapFilter.uv => 'UV ${point.weather.uv.toStringAsFixed(1)}',
-      };
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: label,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            shadows: [Shadow(color: Color(0xAA000000), blurRadius: 4)],
+      final offset = camera.latLngToScreenOffset(point.location);
+      final bounds = Rect.fromCenter(
+        center: offset,
+        width: width + 12,
+        height: height + 12,
+      );
+      final compact = occupied.any((other) => other.overlaps(bounds));
+      occupied.add(
+        compact
+            ? Rect.fromCenter(center: offset, width: 48, height: 48)
+            : bounds,
+      );
+      markers.add(
+        Marker(
+          point: point.location,
+          width: compact ? 48 : width,
+          height: compact ? 48 : height,
+          rotate: true,
+          child: WeatherMapMarker(
+            title: point.cityName ?? point.weather.locationName,
+            value: _value(point.weather),
+            icon: filter.icon,
+            color: filter.color,
+            compact: compact,
+            semanticLabel:
+                '${point.cityName ?? point.weather.locationName}, ${filter.label}: ${_value(point.weather)}. Toque para detalhes.',
+            onTap: () => showModalBottomSheet<void>(
+              context: context,
+              isScrollControlled: true,
+              showDragHandle: true,
+              useSafeArea: true,
+              builder: (_) => WeatherPointDetails(
+                weather: point.weather,
+                cityName: point.cityName,
+              ),
+            ),
           ),
         ),
-        textAlign: TextAlign.center,
-        textDirection: TextDirection.ltr,
-      )..layout();
-      textPainter.paint(
-        canvas,
-        center - Offset(textPainter.width / 2, textPainter.height / 2),
       );
     }
-  }
-
-  @override
-  bool shouldRepaint(covariant ThermalMapPainter oldDelegate) {
-    return oldDelegate.camera != camera ||
-        oldDelegate.filter != filter ||
-        oldDelegate.points != points;
+    return MarkerLayer(markers: markers);
   }
 }
 
@@ -743,7 +908,9 @@ class MapMetric extends StatelessWidget {
 }
 
 class WeatherPoint {
-  const WeatherPoint(this.location, this.weather);
+  const WeatherPoint(this.location, this.weather, {this.cityName});
+
+  final String? cityName;
 
   final LatLng location;
   final WeatherData weather;
@@ -852,9 +1019,21 @@ class CurrentWeatherCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(weather?.condition ?? 'Carregando condicoes...', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                    Text(
+                      weather?.condition ?? 'Carregando condicoes...',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     const SizedBox(height: 6),
-                    Text(weather == null ? 'Atualizando sua previsao' : 'Sensacao de ${weather!.feelsLike.round()} C', style: const TextStyle(color: Color(0xFFE3F2FD))),
+                    Text(
+                      weather == null
+                          ? 'Atualizando sua previsao'
+                          : 'Sensação de ${weather!.feelsLike.round()}°C',
+                      style: const TextStyle(color: Color(0xFFE3F2FD)),
+                    ),
                   ],
                 ),
               ),
@@ -870,13 +1049,31 @@ class CurrentWeatherCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          Text(weather == null ? '-- C' : '${weather!.temperature.round()} C', style: const TextStyle(color: Colors.white, fontSize: 52, fontWeight: FontWeight.w800, height: 1)),
+          Text(
+            weather == null ? '--°' : '${weather!.temperature.round()}°',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 52,
+              fontWeight: FontWeight.w800,
+              height: 1,
+            ),
+          ),
           const SizedBox(height: 18),
           Row(
             children: [
-              _WeatherHighlight(icon: Icons.water_drop_outlined, label: 'Chuva', value: weather == null ? '--' : '${weather!.rainChance}%'),
+              _WeatherHighlight(
+                icon: Icons.water_drop_outlined,
+                label: 'Chuva',
+                value: weather == null ? '--' : '${weather!.rainChance}%',
+              ),
               const SizedBox(width: 18),
-              _WeatherHighlight(icon: Icons.air, label: 'Vento', value: weather == null ? '--' : '${weather!.windKph.round()} km/h'),
+              _WeatherHighlight(
+                icon: Icons.air,
+                label: 'Vento',
+                value: weather == null
+                    ? '--'
+                    : '${weather!.windKph.round()} km/h',
+              ),
             ],
           ),
         ],
@@ -893,63 +1090,87 @@ class _WeatherCardStyle {
   factory _WeatherCardStyle.fromCondition(String? condition) {
     final text = (condition ?? '').toLowerCase();
     if (text.contains('trovoada') || text.contains('tempestade')) {
-      return const _WeatherCardStyle(
-        [Color(0xFF1A237E), Color(0xFF4527A0), Color(0xFF5C6BC0)],
-        Icons.thunderstorm,
-      );
+      return const _WeatherCardStyle([
+        Color(0xFF1A237E),
+        Color(0xFF4527A0),
+        Color(0xFF5C6BC0),
+      ], Icons.thunderstorm);
     }
-    if (text.contains('chuva') || text.contains('garoa') || text.contains('chuvisco')) {
-      return const _WeatherCardStyle(
-        [Color(0xFF263238), Color(0xFF455A64), Color(0xFF607D8B)],
-        Icons.water_drop,
-      );
+    if (text.contains('chuva') ||
+        text.contains('garoa') ||
+        text.contains('chuvisco')) {
+      return const _WeatherCardStyle([
+        Color(0xFF263238),
+        Color(0xFF455A64),
+        Color(0xFF607D8B),
+      ], Icons.water_drop);
     }
     if (text.contains('nublado') || text.contains('encoberto')) {
-      return const _WeatherCardStyle(
-        [Color(0xFF37474F), Color(0xFF546E7A), Color(0xFF78909C)],
-        Icons.cloud,
-      );
+      return const _WeatherCardStyle([
+        Color(0xFF37474F),
+        Color(0xFF546E7A),
+        Color(0xFF78909C),
+      ], Icons.cloud);
     }
-    if (text.contains('nevoeiro') || text.contains('neblina') || text.contains('névoa')) {
-      return const _WeatherCardStyle(
-        [Color(0xFF546E7A), Color(0xFF78909C), Color(0xFF90A4AE)],
-        Icons.foggy,
-      );
+    if (text.contains('nevoeiro') ||
+        text.contains('neblina') ||
+        text.contains('névoa')) {
+      return const _WeatherCardStyle([
+        Color(0xFF546E7A),
+        Color(0xFF78909C),
+        Color(0xFF90A4AE),
+      ], Icons.foggy);
     }
-    if (text.contains('sol') || text.contains('limpo') || text.contains('claro')) {
-      return const _WeatherCardStyle(
-        [Color(0xFFFF8F00), Color(0xFFFFB300), Color(0xFFFFCA28)],
-        Icons.wb_sunny,
-      );
+    if (text.contains('sol') ||
+        text.contains('limpo') ||
+        text.contains('claro')) {
+      return const _WeatherCardStyle([
+        Color(0xFFFF8F00),
+        Color(0xFFFFB300),
+        Color(0xFFFFCA28),
+      ], Icons.wb_sunny);
     }
-    return const _WeatherCardStyle(
-      [Color(0xFF0D47A1), Color(0xFF1976D2), Color(0xFF42A5F5)],
-      Icons.wb_cloudy_outlined,
-    );
+    return const _WeatherCardStyle([
+      Color(0xFF0D47A1),
+      Color(0xFF1976D2),
+      Color(0xFF42A5F5),
+    ], Icons.wb_cloudy_outlined);
   }
 }
 
 class _WeatherHighlight extends StatelessWidget {
-  const _WeatherHighlight({required this.icon, required this.label, required this.value});
+  const _WeatherHighlight({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
   final IconData icon;
   final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, color: const Color(0xFFE3F2FD), size: 19),
+      const SizedBox(width: 6),
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: const Color(0xFFE3F2FD), size: 19),
-          const SizedBox(width: 6),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: const TextStyle(color: Color(0xFFE3F2FD), fontSize: 12)),
-              Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-            ],
+          Text(
+            label,
+            style: const TextStyle(color: Color(0xFFE3F2FD), fontSize: 12),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ],
-      );
-
+      ),
+    ],
+  );
 }
 
 class HourlyForecastList extends StatelessWidget {
@@ -966,8 +1187,12 @@ class HourlyForecastList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scale = (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(
+      1.0,
+      double.infinity,
+    );
     return SizedBox(
-      height: 144,
+      height: 170 * scale,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: weather?.hours.length ?? fallbackItems.length,
@@ -976,7 +1201,7 @@ class HourlyForecastList extends StatelessWidget {
           final item = weather?.hours[index] ?? fallbackItems[index];
 
           return InfoCard(
-            width: 112,
+            width: 112 * scale,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -1006,7 +1231,9 @@ class DailyForecastList extends StatelessWidget {
   Widget build(BuildContext context) {
     final days = weather?.days ?? const <DailyForecast>[];
     if (days.isEmpty) {
-      return const InfoCard(child: Text('Carregando previsao dos proximos dias...'));
+      return const InfoCard(
+        child: Text('Carregando previsao dos proximos dias...'),
+      );
     }
     return Column(
       children: [
@@ -1016,11 +1243,25 @@ class DailyForecastList extends StatelessWidget {
             child: InfoCard(
               child: Row(
                 children: [
-                  SizedBox(width: 48, child: Text(day.day, style: const TextStyle(fontWeight: FontWeight.w800))),
+                  SizedBox(
+                    width: 48,
+                    child: Text(
+                      day.day,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
                   Icon(day.icon, color: const Color(0xFF1565C0)),
                   const SizedBox(width: 12),
-                  Expanded(child: Text('${day.rainChance} de chuva · ${day.precipitationMm}', style: const TextStyle(color: Color(0xFF5A6B70)))),
-                  Text('${day.minTemperature}  ${day.maxTemperature}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                  Expanded(
+                    child: Text(
+                      '${day.rainChance} de chuva · ${day.precipitationMm}',
+                      style: const TextStyle(color: Color(0xFF5A6B70)),
+                    ),
+                  ),
+                  Text(
+                    '${day.minTemperature}  ${day.maxTemperature}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
                 ],
               ),
             ),
@@ -1037,25 +1278,73 @@ class WeatherMetricGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, constraints) {
-          final width = (constraints.maxWidth - 12) / 2;
-          final data = weather;
-          return Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              MetricTile(width: width, icon: Icons.water_drop, label: 'Chuva prevista', value: data == null ? '--' : '${data.rainChance}%\n${data.forecastPrecipitationMm.toStringAsFixed(1)} mm'),
-              MetricTile(width: width, icon: Icons.air, label: 'Vento', value: data == null ? '--' : '${data.windKph.round()} km/h\n${data.windDirection}'),
-              MetricTile(width: width, icon: Icons.speed, label: 'Rajadas', value: data == null ? '--' : '${data.gustKph.round()} km/h'),
-              MetricTile(width: width, icon: Icons.wb_sunny, label: 'Radiacao UV', value: data == null ? '--' : '${data.uv.toStringAsFixed(1)} · ${_uvLabel(data.uv)}'),
-              MetricTile(width: width, icon: Icons.water, label: 'Umidade', value: data == null ? '--' : '${data.humidity}%'),
-              MetricTile(width: width, icon: Icons.visibility, label: 'Visibilidade', value: data == null ? '--' : '${data.visibilityKm.toStringAsFixed(1)} km'),
-              MetricTile(width: width, icon: Icons.compress, label: 'Pressao', value: data == null ? '--' : '${data.pressureMb.round()} mb'),
-              MetricTile(width: width, icon: Icons.cloud_outlined, label: 'Nuvens', value: data == null ? '--' : '${data.cloudCoverage}%'),
-            ],
-          );
-        },
+    builder: (context, constraints) {
+      final width = (constraints.maxWidth - 12) / 2;
+      final data = weather;
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          MetricTile(
+            width: width,
+            icon: Icons.water_drop,
+            label: 'Chuva prevista',
+            value: data == null
+                ? '--'
+                : '${data.rainChance}%\n${data.forecastPrecipitationMm.toStringAsFixed(1)} mm',
+          ),
+          MetricTile(
+            width: width,
+            icon: Icons.air,
+            label: 'Vento',
+            value: data == null
+                ? '--'
+                : '${data.windKph.round()} km/h\n${data.windDirection}',
+          ),
+          MetricTile(
+            width: width,
+            icon: Icons.speed,
+            label: 'Rajadas',
+            value: data == null ? '--' : '${data.gustKph.round()} km/h',
+          ),
+          MetricTile(
+            width: width,
+            icon: Icons.wb_sunny,
+            label: 'Radiacao UV',
+            value: data == null
+                ? '--'
+                : '${data.uv.toStringAsFixed(1)} · ${_uvLabel(data.uv)}',
+          ),
+          MetricTile(
+            width: width,
+            icon: Icons.water,
+            label: 'Umidade',
+            value: data == null ? '--' : '${data.humidity}%',
+          ),
+          MetricTile(
+            width: width,
+            icon: Icons.visibility,
+            label: 'Visibilidade',
+            value: data == null
+                ? '--'
+                : '${data.visibilityKm.toStringAsFixed(1)} km',
+          ),
+          MetricTile(
+            width: width,
+            icon: Icons.compress,
+            label: 'Pressao',
+            value: data == null ? '--' : '${data.pressureMb.round()} mb',
+          ),
+          MetricTile(
+            width: width,
+            icon: Icons.cloud_outlined,
+            label: 'Nuvens',
+            value: data == null ? '--' : '${data.cloudCoverage}%',
+          ),
+        ],
       );
+    },
+  );
 
   String _uvLabel(double value) {
     if (value < 3) return 'baixo';

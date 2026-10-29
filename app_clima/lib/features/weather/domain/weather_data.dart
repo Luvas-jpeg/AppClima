@@ -19,8 +19,10 @@ class WeatherData {
     required this.rainChance,
     required this.hours,
     required this.days,
+    this.sourceUpdatedAt,
   });
 
+  final DateTime? sourceUpdatedAt;
   final String locationName;
   final double temperature;
   final double feelsLike;
@@ -64,7 +66,8 @@ class DailyForecast {
         ? 'Hoje'
         : date == null
         ? 'Proximo dia'
-        : const ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'][date.weekday - 1];
+        : const ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'][date.weekday -
+              1];
     final condition = day['condition'] as Map<String, dynamic>;
     return DailyForecast(
       day: label,
@@ -72,7 +75,8 @@ class DailyForecast {
       minTemperature: '${(day['mintemp_c'] as num).round()} C',
       maxTemperature: '${(day['maxtemp_c'] as num).round()} C',
       rainChance: '${day['daily_chance_of_rain']}%',
-      precipitationMm: '${(day['totalprecip_mm'] as num).toStringAsFixed(1)} mm',
+      precipitationMm:
+          '${(day['totalprecip_mm'] as num).toStringAsFixed(1)} mm',
     );
   }
 }
