@@ -5,6 +5,7 @@ import 'package:app_clima/features/route/data/route_service.dart';
 import 'package:app_clima/features/route/domain/route_result.dart';
 import 'package:app_clima/features/route/presentation/route_search_page.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -26,6 +27,32 @@ http.Response response(String name) => http.Response(
 );
 
 void main() {
+  testWidgets(
+    'mostra destinos recentes antes de digitar e filtra ao iniciar busca',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'route_history_v1': [
+          jsonEncode({
+            'destination': 'Destino recente',
+            'transport': 'Carro',
+            'latitude': -23.55,
+            'longitude': -46.63,
+            'createdAt': DateTime.now().toIso8601String(),
+          }),
+        ],
+      });
+      addTearDown(() => SharedPreferences.setMockInitialValues({}));
+      await tester.pumpWidget(const MaterialApp(home: RouteSearchPage()));
+      await tester.pumpAndSettle();
+      expect(find.text('Destinos recentes'), findsOneWidget);
+      expect(find.text('Destino recente'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'a');
+      await tester.pumpAndSettle();
+      expect(find.text('Destino recente'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'CEP localizado mostra marcador e permite confirmar sem redigitar endereço',
     (tester) async {

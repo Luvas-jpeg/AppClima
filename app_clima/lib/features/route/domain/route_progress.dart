@@ -24,10 +24,60 @@ class RouteProgress {
   DateTime? _lastMovementAt;
   double _movementAnchor = 0;
   bool offRoute = false;
+  double? _cachedTraveledMeters;
+  final _remainingPoints = <(int, int), List<LatLng>>{};
+  LatLng? _projectionLocation;
+  double _projectionOffset = double.infinity;
+  double _projectionMeters = 0;
 
   double get totalMeters => distances.last;
   double get fraction =>
       totalMeters == 0 ? 0 : (traveledMeters / totalMeters).clamp(0, 1);
+
+  /// Clips a route segment at the same GPS progress used by the progress bar.
+  /// Keeps the original indices available for weather markers and colors.
+  List<LatLng> remainingPoints({int startIndex = 0, int? endIndex}) {
+    final end = endIndex ?? route.points.length - 1;
+    if (end <= startIndex || traveledMeters >= distances[end]) return [];
+    if (_cachedTraveledMeters != traveledMeters) {
+      _remainingPoints.clear();
+      _cachedTraveledMeters = traveledMeters;
+    }
+    final key = (startIndex, end);
+    final cached = _remainingPoints[key];
+    if (cached != null) return cached;
+    final startMeters = math.max(traveledMeters, distances[startIndex]);
+    // Locate the first remaining vertex without scanning the traversed route.
+    var low = startIndex + 1;
+    var high = end;
+    while (low < high) {
+      final middle = (low + high) ~/ 2;
+      if (distances[middle] <= startMeters) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    final i = low;
+    final a = route.points[i - 1];
+    final b = route.points[i];
+    final t =
+        (startMeters - distances[i - 1]) / (distances[i] - distances[i - 1]);
+    final longitudeDelta = (b.longitude - a.longitude + 540) % 360 - 180;
+    final remaining = <LatLng>[
+      if (t == 0)
+        a
+      else
+        LatLng(
+          a.latitude + (b.latitude - a.latitude) * t,
+          (a.longitude + longitudeDelta * t + 540) % 360 - 180,
+        ),
+      ...route.points.sublist(i, end + 1),
+    ];
+    _remainingPoints[key] = remaining;
+    return remaining;
+  }
+
   bool get usesObservedPace => _observedSpeed != null;
   double get metersPerSecond =>
       _observedSpeed ??
@@ -66,37 +116,46 @@ class RouteProgress {
 
     // Use a local plane for the segment projection; lengths follow the route
     // geometry rather than the number or spacing of its coordinates.
-    const radius = 6371000.0;
-    final scale = math.cos(location.latitude * math.pi / 180);
-    double longitudeDelta(double longitude) =>
-        ((longitude - location.longitude + 540) % 360 - 180) * math.pi / 180;
-    var bestOffset = double.infinity;
-    var along = traveledMeters;
-    for (var i = 1; i < route.points.length; i++) {
-      final a = route.points[i - 1];
-      final b = route.points[i];
-      final ax = longitudeDelta(a.longitude) * radius * scale;
-      final ay = (a.latitude - location.latitude) * math.pi / 180 * radius;
-      final bx = longitudeDelta(b.longitude) * radius * scale;
-      final by = (b.latitude - location.latitude) * math.pi / 180 * radius;
-      final dx = bx - ax;
-      final dy = by - ay;
-      final lengthSquared = dx * dx + dy * dy;
-      final t = lengthSquared == 0
-          ? 0.0
-          : (-(ax * dx + ay * dy) / lengthSquared).clamp(0.0, 1.0);
-      final offset = math.sqrt(
-        math.pow(ax + t * dx, 2) + math.pow(ay + t * dy, 2),
-      );
-      final candidate =
-          distances[i - 1] + t * (distances[i] - distances[i - 1]);
-      if (offset < bestOffset - 1 ||
-          ((offset - bestOffset).abs() <= 1 &&
-              (candidate - traveledMeters).abs() <
-                  (along - traveledMeters).abs())) {
-        bestOffset = offset;
-        along = candidate;
+    var bestOffset = _projectionOffset;
+    var along = _projectionMeters;
+    if (_projectionLocation != location) {
+      const radius = 6371000.0;
+      final scale = math.cos(location.latitude * math.pi / 180);
+      double longitudeDelta(double longitude) =>
+          ((longitude - location.longitude + 540) % 360 - 180) * math.pi / 180;
+      bestOffset = double.infinity;
+      along = traveledMeters;
+      for (var i = 1; i < route.points.length; i++) {
+        final a = route.points[i - 1];
+        final b = route.points[i];
+        final ax = longitudeDelta(a.longitude) * radius * scale;
+        final ay = (a.latitude - location.latitude) * math.pi / 180 * radius;
+        final bx = longitudeDelta(b.longitude) * radius * scale;
+        final by = (b.latitude - location.latitude) * math.pi / 180 * radius;
+        final dx = bx - ax;
+        final dy = by - ay;
+        final lengthSquared = dx * dx + dy * dy;
+        final t = lengthSquared == 0
+            ? 0.0
+            : (-(ax * dx + ay * dy) / lengthSquared).clamp(0.0, 1.0);
+        final projectedX = ax + t * dx;
+        final projectedY = ay + t * dy;
+        final offset = math.sqrt(
+          projectedX * projectedX + projectedY * projectedY,
+        );
+        final candidate =
+            distances[i - 1] + t * (distances[i] - distances[i - 1]);
+        if (offset < bestOffset - 1 ||
+            ((offset - bestOffset).abs() <= 1 &&
+                (candidate - traveledMeters).abs() <
+                    (along - traveledMeters).abs())) {
+          bestOffset = offset;
+          along = candidate;
+        }
       }
+      _projectionLocation = location;
+      _projectionOffset = bestOffset;
+      _projectionMeters = along;
     }
     offRoute = bestOffset > math.max(30, accuracy * 2);
     if (offRoute) return false;

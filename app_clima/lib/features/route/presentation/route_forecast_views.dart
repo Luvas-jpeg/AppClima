@@ -31,6 +31,7 @@ class RouteTripSummary extends StatelessWidget {
     required this.isLoading,
     required this.onForecast,
     required this.onStart,
+    this.showStart = true,
     super.key,
   });
   final RouteResult route;
@@ -39,6 +40,7 @@ class RouteTripSummary extends StatelessWidget {
   final bool isLoading;
   final VoidCallback onForecast;
   final VoidCallback? onStart;
+  final bool showStart;
 
   @override
   Widget build(BuildContext context) {
@@ -127,15 +129,15 @@ class RouteTripSummary extends StatelessWidget {
               label: const Text('Ver previsão do trajeto'),
             ),
           ),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: onStart,
-              icon: const Icon(Icons.navigation_rounded),
-              label: const Text('Iniciar viagem'),
+          if (showStart)
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: onStart,
+                icon: const Icon(Icons.navigation_rounded),
+                label: const Text('Iniciar viagem'),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -168,10 +170,12 @@ class RouteForecastTimelinePage extends StatelessWidget {
   const RouteForecastTimelinePage({
     required this.points,
     required this.departureAt,
+    this.destinationRouteIndex,
     super.key,
   });
   final List<RouteClimatePoint> points;
   final DateTime departureAt;
+  final int? destinationRouteIndex;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -206,9 +210,9 @@ class RouteForecastTimelinePage extends StatelessWidget {
         .difference(departureAt)
         .inMinutes
         .clamp(0, 999999);
-    final stage = index == 0
+    final stage = point.routeIndex == 0
         ? 'Saída'
-        : index == points.length - 1
+        : point.routeIndex == (destinationRouteIndex ?? points.last.routeIndex)
         ? 'Chegada'
         : 'Trecho $index';
     final timing = elapsed == 0 ? 'Na saída' : 'Em cerca de $elapsed min';
@@ -365,11 +369,13 @@ class RouteForecastPointDetails extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Text(
-            'Passagem estimada: ${routeDateTime(point.arrivalAt)}',
-            style: const TextStyle(
-              color: Color(0xFF087F8C),
-              fontWeight: FontWeight.w700,
+          InfoCard(
+            child: Text(
+              'Passagem estimada: ${routeDateTime(point.arrivalAt)}',
+              style: const TextStyle(
+                color: Color(0xFF087F8C),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           const SizedBox(height: 12),

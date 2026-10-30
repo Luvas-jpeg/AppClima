@@ -31,11 +31,16 @@ const weather = WeatherData(
   hours: [],
   days: [],
 );
-Position position(double lat, double lon, {int seconds = 0}) => Position(
+Position position(
+  double lat,
+  double lon, {
+  int seconds = 0,
+  double accuracy = 5,
+}) => Position(
   latitude: lat,
   longitude: lon,
   timestamp: DateTime(2026).add(Duration(seconds: seconds)),
-  accuracy: 5,
+  accuracy: accuracy,
   altitude: 0,
   altitudeAccuracy: 1,
   heading: 0,
@@ -76,7 +81,201 @@ Widget page(Stream<Position> stream) => MaterialApp(
   ),
 );
 
+class _TrackingPlatform extends GeolocatorPlatform {
+  int starts = 0;
+  int stops = 0;
+  LocationSettings? settings;
+  late final fixes = StreamController<Position>.broadcast(
+    onListen: () => starts++,
+    onCancel: () => stops++,
+  );
+
+  @override
+  Stream<Position> getPositionStream({LocationSettings? locationSettings}) {
+    settings = locationSettings;
+    return fixes.stream;
+  }
+}
+
 void main() {
+  testWidgets(
+    'exibe previsões recebidas antes da consulta mais lenta terminar',
+    (tester) async {
+      final slow = Completer<WeatherData>();
+      var requests = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RouteNavigationPage(
+            route: plan.route,
+            destination: null,
+            climatePoints: const [],
+            filter: RouteWeatherFilter.rain,
+            initialPosition: position(-23.55, -46.63),
+            positionStream: const Stream.empty(),
+            forecastLoader: (_, _) =>
+                ++requests == 4 ? slow.future : Future.value(weather),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Ver trajeto completo'));
+      await tester.pumpAndSettle();
+      expect(find.byType(RouteWeatherMapIcon), findsNWidgets(3));
+      expect(slow.isCompleted, isFalse);
+      slow.complete(weather);
+      await tester.pumpAndSettle();
+      expect(find.byType(RouteWeatherMapIcon), findsNWidgets(4));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'suspende GPS em segundo plano e retoma sem duplicar assinatura',
+    (tester) async {
+      final previous = GeolocatorPlatform.instance;
+      final platform = _TrackingPlatform();
+      GeolocatorPlatform.instance = platform;
+      addTearDown(() async {
+        GeolocatorPlatform.instance = previous;
+        await platform.fixes.close();
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RouteNavigationPage(
+            route: plan.route,
+            destination: null,
+            climatePoints: forecasts,
+            filter: RouteWeatherFilter.rain,
+            initialPosition: position(-23.55, -46.63),
+            forecastLoader: (_, _) async => weather,
+            clock: () => DateTime(2026, 10, 28, 14),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(platform.starts, 1);
+      expect(
+        (platform.settings as AndroidSettings).intervalDuration,
+        const Duration(seconds: 2),
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      expect(platform.stops, 1);
+      platform.fixes.add(position(-23.56, -46.64, seconds: 60));
+      await tester.pump(const Duration(seconds: 60));
+      expect(find.text('0% do trajeto percorrido'), findsOneWidget);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      // Native stream cancellation can complete outside the fake clock.
+      await tester.runAsync(() async => Future<void>.delayed(Duration.zero));
+      await tester.pumpAndSettle();
+      expect(platform.starts, 2);
+      platform.fixes.add(position(-23.56, -46.64, seconds: 120));
+      await tester.pumpAndSettle();
+      expect(find.text('100% do trajeto percorrido'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      expect(platform.stops, 2);
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  testWidgets('ruído parado não reconstrói o mapa nem altera a câmera', (
+    tester,
+  ) async {
+    final stream = StreamController<Position>();
+    addTearDown(stream.close);
+    await tester.pumpWidget(page(stream.stream));
+    await tester.pumpAndSettle();
+    final map = tester.widget<FlutterMap>(find.byType(FlutterMap));
+    final center = map.mapController!.camera.center;
+    final lines = tester
+        .widget<PolylineLayer>(find.byType(PolylineLayer))
+        .polylines;
+    for (var i = 1; i <= 8; i++) {
+      stream.add(
+        position(-23.55 + (i.isEven ? .000001 : 0), -46.63, seconds: i),
+      );
+      await tester.pumpAndSettle();
+    }
+    expect(
+      identical(tester.widget<FlutterMap>(find.byType(FlutterMap)), map),
+      isTrue,
+    );
+    expect(map.mapController!.camera.center, center);
+    await tester.tap(find.byTooltip('Ocultar previsões'));
+    await tester.pumpAndSettle();
+    expect(
+      identical(
+        tester.widget<PolylineLayer>(find.byType(PolylineLayer)).polylines,
+        lines,
+      ),
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('oculta previsões e mantém escolha durante atualizações do GPS', (
+    tester,
+  ) async {
+    final stream = StreamController<Position>();
+    addTearDown(stream.close);
+    await tester.pumpWidget(page(stream.stream));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Ver trajeto completo'));
+    await tester.pumpAndSettle();
+    expect(find.byType(RouteWeatherMapIcon), findsNWidgets(4));
+    final lines = tester.widget<PolylineLayer>(find.byType(PolylineLayer));
+    final colors = lines.polylines.map((line) => line.color).toList();
+    await tester.tap(find.byTooltip('Ocultar previsões'));
+    await tester.pumpAndSettle();
+    expect(find.byType(RouteWeatherMapIcon), findsNothing);
+    expect(find.byKey(const ValueKey('route-forecast-anchor-1')), findsNothing);
+    expect(
+      tester
+          .widget<PolylineLayer>(find.byType(PolylineLayer))
+          .polylines
+          .map((line) => line.color),
+      colors,
+    );
+    stream.add(position(-23.555, -46.635, seconds: 60));
+    await tester.pumpAndSettle();
+    expect(find.text('50% do trajeto percorrido'), findsOneWidget);
+    expect(find.byType(RouteWeatherMapIcon), findsNothing);
+    await tester.tap(find.byTooltip('Ocultar detalhes'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Mostrar previsões'), findsOneWidget);
+    await tester.tap(find.byTooltip('Mostrar previsões'));
+    await tester.pumpAndSettle();
+    expect(find.byType(RouteWeatherMapIcon), findsNWidgets(4));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'GPS impreciso mantém progresso e retoma ao receber sinal preciso',
+    (tester) async {
+      final stream = StreamController<Position>();
+      addTearDown(stream.close);
+      await tester.pumpWidget(page(stream.stream));
+      await tester.pumpAndSettle();
+      stream.add(position(-23.555, -46.635, seconds: 60, accuracy: 100));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Sinal GPS impreciso'), findsOneWidget);
+      expect(find.text('0% do trajeto percorrido'), findsOneWidget);
+      final before = tester.widget<PolylineLayer>(find.byType(PolylineLayer));
+      expect(before.polylines.first.points.first, plan.route.points.first);
+      stream.add(position(-23.555, -46.635, seconds: 120));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Sinal GPS impreciso'), findsNothing);
+      expect(find.text('50% do trajeto percorrido'), findsOneWidget);
+      final after = tester.widget<PolylineLayer>(find.byType(PolylineLayer));
+      expect(
+        after.polylines.first.points.first.latitude,
+        closeTo(-23.555, .00001),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('GPS ajusta distância, chegada e horários sem novas consultas', (
     tester,
   ) async {
@@ -150,8 +349,28 @@ void main() {
     await tester.tap(find.byTooltip('Mostrar detalhes'));
     await tester.pumpAndSettle();
     expect(find.text('20% do trajeto percorrido'), findsOneWidget);
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(find.byType(LinearProgressIndicator))
+          .value,
+      closeTo(.2, .001),
+    );
+    final lines = tester.widget<PolylineLayer>(find.byType(PolylineLayer));
+    // Both the white outline and weather colors start at the GPS projection,
+    // even when it lies between vertices in the original route.
+    expect(lines.polylines, hasLength(2));
+    for (final line in lines.polylines) {
+      expect(line.points.first.longitude, closeTo(.002, 1e-9));
+      expect(line.points.last, route.points.last);
+    }
     expect(find.text('Chegada em cerca de 12 min'), findsOneWidget);
     expect(calls, 3);
+    now = now.add(const Duration(minutes: 2));
+    stream.add(fix(.01));
+    await tester.pumpAndSettle();
+    expect(find.text('100% do trajeto percorrido'), findsOneWidget);
+    expect(find.text('Você chegou ao destino'), findsOneWidget);
+    expect(find.byType(PolylineLayer), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -208,6 +427,8 @@ void main() {
         find.textContaining('Os últimos dados foram mantidos'),
         findsOneWidget,
       );
+      await tester.tap(find.byTooltip('Ver trajeto completo'));
+      await tester.pumpAndSettle();
       expect(find.byType(RouteWeatherMapIcon), findsNWidgets(4));
       fail = false;
       now = DateTime(2026, 10, 28, 14, 45);
@@ -232,6 +453,8 @@ void main() {
     final stream = StreamController<Position>();
     addTearDown(stream.close);
     await tester.pumpWidget(page(stream.stream));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clima e detalhes do trajeto'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ChoiceChip, 'Vento'));
     await tester.pumpAndSettle();
@@ -264,10 +487,20 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('inicia mostrando a rota toda e todos os pontos de previsão', (
+  testWidgets('inicia acompanhando o GPS e permite ver a rota e as previsões', (
     tester,
   ) async {
     await tester.pumpWidget(page(const Stream.empty()));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<FlutterMap>(find.byType(FlutterMap))
+          .mapController!
+          .camera
+          .zoom,
+      15,
+    );
+    await tester.tap(find.byTooltip('Ver trajeto completo'));
     await tester.pumpAndSettle();
     final map = tester.widget<FlutterMap>(find.byType(FlutterMap));
     expect(
@@ -302,7 +535,13 @@ void main() {
     final center = map.mapController!.camera.center;
     stream.add(position(-23.552, -46.632, seconds: 60));
     await tester.pumpAndSettle();
-    expect(map.mapController!.camera.center, center);
+    expect(map.mapController!.camera.center, isNot(center));
+    await tester.tap(find.byTooltip('Ver trajeto completo'));
+    await tester.pumpAndSettle();
+    final overviewCenter = map.mapController!.camera.center;
+    stream.add(position(-23.554, -46.634, seconds: 120));
+    await tester.pumpAndSettle();
+    expect(map.mapController!.camera.center, overviewCenter);
     await tester.tap(find.byTooltip('Acompanhar minha localização'));
     await tester.pumpAndSettle();
     expect(map.mapController!.camera.zoom, 15);
@@ -326,6 +565,8 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pumpWidget(page(const Stream.empty()));
     await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Ver trajeto completo'));
+    await tester.pumpAndSettle();
     expect(find.byType(RouteWeatherMapIcon), findsNWidgets(4));
     expect(tester.takeException(), isNull);
   });
@@ -347,6 +588,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await tester.tap(find.text('Clima e detalhes do trajeto'));
+      await tester.pumpAndSettle();
       final panelText = find.textContaining('Próximo trecho ·');
       // On small viewports the details scroll without covering the map.
       await tester.ensureVisible(panelText);
@@ -366,6 +609,10 @@ void main() {
     'cada filtro muda valores, unidade, ícone, legenda e painel do próximo trecho',
     (tester) async {
       await tester.pumpWidget(page(const Stream.empty()));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Clima e detalhes do trajeto'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Ver trajeto completo'));
       await tester.pumpAndSettle();
       for (final entry in [
         (filter: RouteWeatherFilter.wind, value: '15 km/h'),

@@ -5,6 +5,8 @@ import 'package:app_clima/features/route/data/route_service.dart';
 import 'package:app_clima/features/route/presentation/route_page.dart';
 import 'package:app_clima/features/route/presentation/route_search_page.dart';
 import 'package:app_clima/features/route/presentation/route_destination_picker_page.dart';
+import 'package:app_clima/features/route/domain/route_result.dart';
+import 'package:app_clima/features/weather/domain/weather_data.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,6 +43,83 @@ Position position() => Position(
 );
 
 void main() {
+  testWidgets('libera iniciar viagem enquanto o clima ainda está carregando', (
+    tester,
+  ) async {
+    final forecast = Completer<WeatherData>();
+    final service = RouteService(
+      apiKey: 'test',
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'features': [
+              {
+                'geometry': {
+                  'type': 'LineString',
+                  'coordinates': [
+                    [-46.63, -23.55],
+                    [-46.64, -23.56],
+                  ],
+                },
+                'properties': {'distance': 1500, 'time': 600},
+              },
+            ],
+          }),
+          200,
+        ),
+      ),
+    );
+    addTearDown(service.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: RoutePage(
+            initialDestination: const RouteDestination(
+              name: 'Destino',
+              location: LatLng(-23.56, -46.64),
+            ),
+            locationProvider: () async => position(),
+            service: service,
+            forecastLoader: (_, _) => forecast.future,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Definir rota'));
+    await tester.pumpAndSettle();
+    final start = find.widgetWithText(FilledButton, 'Iniciar viagem');
+    var scroll = tester.state<ScrollableState>(find.byType(Scrollable).first);
+    scroll.position.jumpTo(scroll.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(forecast.isCompleted, isFalse);
+    expect(find.text('Consultando o clima do caminho…'), findsOneWidget);
+    expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
+    final mapHeight = tester.getSize(find.byType(FlutterMap)).height;
+    await tester.tap(find.byTooltip('Recolher planejamento'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byType(FlutterMap)).height,
+      greaterThan(mapHeight),
+    );
+    expect(start.hitTestable(), findsOneWidget);
+    await tester.tap(find.byTooltip('Expandir planejamento'));
+    await tester.pumpAndSettle();
+    scroll = tester.state<ScrollableState>(find.byType(Scrollable).first);
+    forecast.completeError(Exception('Sem internet'));
+    await tester.pumpAndSettle();
+    scroll.position.jumpTo(0);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.textContaining('A rota foi encontrada, mas'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.textContaining('A rota foi encontrada, mas'), findsOneWidget);
+    expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('mapa pode ser aberto e marcado enquanto GPS carrega', (
     tester,
   ) async {

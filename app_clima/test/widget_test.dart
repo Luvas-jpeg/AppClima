@@ -17,7 +17,7 @@ void main() {
     await tester.tap(find.text('Planejar rota'));
     await tester.pumpAndSettle();
     expect(find.text('Planejar viagem'), findsOneWidget);
-    expect(find.text('Rota com clima'), findsOneWidget);
+    expect(find.text('Para onde vamos?'), findsOneWidget);
     expect(find.byType(BackButton), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -56,7 +56,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tap(find.text('Planejar rota'));
     await tester.pumpAndSettle();
-    expect(find.text('Rota com clima'), findsOneWidget);
+    expect(find.text('Para onde vamos?'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

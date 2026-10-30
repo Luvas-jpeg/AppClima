@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -29,11 +30,13 @@ class RoutePage extends StatefulWidget {
     this.initialDestination,
     this.locationProvider,
     this.service,
+    this.forecastLoader,
     super.key,
   });
   final RouteDestination? initialDestination;
   final Future<Position> Function()? locationProvider;
   final RouteService? service;
+  final Future<WeatherData> Function(LatLng, DateTime)? forecastLoader;
   final ValueNotifier<RouteDestination?>? destinationNotifier;
 
   @override
@@ -50,6 +53,7 @@ class _RoutePageState extends State<RoutePage> {
   RouteDestination? _destination;
   RouteResult? _route;
   DateTime? _departureAt;
+  List<int> _forecastIndices = const [];
   final _mapKey = GlobalKey();
   final _pageScroll = ScrollController();
   List<RouteClimatePoint> _climatePoints = const [];
@@ -58,6 +62,8 @@ class _RoutePageState extends State<RoutePage> {
   int _currentRouteIndex = 0;
   bool _isNavigating = false;
   bool _isLoading = false;
+  bool _isLoadingClimate = false;
+  bool _planningExpanded = true;
   bool _isLocating = true;
   bool _isChoosingDestination = false;
   bool _isStartingNavigation = false;
@@ -84,6 +90,7 @@ class _RoutePageState extends State<RoutePage> {
     _positionSubscription?.cancel();
     _destinationController.dispose();
     _pageScroll.dispose();
+    _mapController.dispose();
     if (widget.service == null) _routeService.close();
     super.dispose();
   }
@@ -245,6 +252,9 @@ class _RoutePageState extends State<RoutePage> {
         _destination = destination;
         _route = route;
         _departureAt = departureAt;
+        _forecastIndices = plan.samples
+            .map((sample) => sample.routeIndex)
+            .toList();
         _climatePoints = const [];
         _isNavigating = false;
         _currentRouteIndex = 0;
@@ -254,25 +264,55 @@ class _RoutePageState extends State<RoutePage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _fitRoute(route);
       });
-      // Salva primeiro: a previsao do clima e complementar e nao pode impedir
-      // que a rota apareca no historico.
-      await _saveRouteHistory(route, destination);
-
-      try {
-        final climatePoints = await _loadRouteClimate(plan)
-            .timeout(const Duration(seconds: 20));
-        if (mounted) setState(() => _climatePoints = climatePoints);
-      } catch (_) {
-        if (mounted) {
-          setState(() {
-            _errorMessage = 'A rota foi encontrada, mas nao foi possivel consultar o clima do trajeto.';
-          });
-        }
-      }
+      unawaited(_saveRouteHistory(route, destination));
+      unawaited(_loadClimateForRoute(plan));
     } catch (error) {
       if (mounted) setState(() => _errorMessage = _messageFor(error));
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadClimateForRoute(RouteForecastPlan plan) async {
+    setState(() => _isLoadingClimate = true);
+    try {
+      var failures = 0;
+      await Future.wait(
+        plan.samples.map((sample) async {
+          try {
+            final weather =
+                await (widget.forecastLoader ?? WeatherService.fetchForecastAt)(
+                  sample.location,
+                  sample.arrivalAt,
+                ).timeout(const Duration(seconds: 20));
+            if (mounted && identical(_route, plan.route)) {
+              setState(() {
+                _climatePoints = [
+                  ..._climatePoints,
+                  RouteClimatePoint(
+                    routeIndex: sample.routeIndex,
+                    arrivalAt: sample.arrivalAt,
+                    weather: weather,
+                  ),
+                ]..sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
+              });
+            }
+          } catch (_) {
+            failures++;
+          }
+        }),
+      );
+      if (failures > 0) throw Exception('Previsões incompletas');
+    } catch (_) {
+      if (mounted && identical(_route, plan.route)) {
+        setState(() {
+          _errorMessage = 'A rota foi encontrada, mas nao foi possivel consultar o clima do trajeto.';
+        });
+      }
+    } finally {
+      if (mounted && identical(_route, plan.route)) {
+        setState(() => _isLoadingClimate = false);
+      }
     }
   }
 
@@ -319,26 +359,6 @@ class _RoutePageState extends State<RoutePage> {
     );
   }
 
-  Future<List<RouteClimatePoint>> _loadRouteClimate(
-    RouteForecastPlan plan,
-  ) async {
-    final samples = plan.samples;
-    final weather = await Future.wait(
-      samples.map(
-        (sample) =>
-            WeatherService.fetchForecastAt(sample.location, sample.arrivalAt),
-      ),
-    );
-    return [
-      for (var index = 0; index < samples.length; index++)
-        RouteClimatePoint(
-          routeIndex: samples[index].routeIndex,
-          arrivalAt: samples[index].arrivalAt,
-          weather: weather[index],
-        ),
-    ];
-  }
-
   String _messageFor(Object error) {
     final message = error.toString().replaceFirst('Exception: ', '');
     if (message.contains('TimeoutException')) {
@@ -367,6 +387,7 @@ class _RoutePageState extends State<RoutePage> {
             climatePoints: _climatePoints,
             filter: _selectedFilter,
             initialPosition: position,
+            forecastIndices: _forecastIndices,
           ),
         ),
       );
@@ -411,41 +432,111 @@ class _RoutePageState extends State<RoutePage> {
         builder: (_) => RouteForecastTimelinePage(
           points: _climatePoints,
           departureAt: _departureAt!,
+          destinationRouteIndex: _route!.points.length - 1,
         ),
       ),
     );
     if (point == null || !mounted || _route == null) return;
-    if (_mapKey.currentContext == null && _pageScroll.hasClients) {
-      await _pageScroll.animateTo(
-        0,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
-    }
-    if (!mounted) return;
-    final mapContext = _mapKey.currentContext;
-    if (mapContext != null && mapContext.mounted) {
-      await Scrollable.ensureVisible(
-        mapContext,
-        duration: const Duration(milliseconds: 300),
-        alignment: 0.1,
-      );
-    }
     if (mounted) _mapController.move(_route!.points[point.routeIndex], 14);
   }
 
   @override
   Widget build(BuildContext context) {
     final route = _route;
+    return LayoutBuilder(
+      builder: (context, constraints) => Column(
+        children: [
+          Expanded(
+            child: _RouteMap(
+              key: _mapKey,
+              mapController: _mapController,
+              origin: _origin,
+              destination: _destination,
+              route: route,
+              climatePoints: _climatePoints,
+              filter: _selectedFilter,
+              liveLocation: _liveLocation,
+              borderRadius: BorderRadius.zero,
+              onDestinationTap: _destinationBusy
+                  ? null
+                  : (point) => _pickDestinationOnMap(initialDestination: point),
+            ),
+          ),
+          Material(
+            color: Colors.white,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    dense: true,
+                    leading: Icon(
+                      _selectedTransport.icon,
+                      color: const Color(0xFF087F8C),
+                    ),
+                    title: Text(
+                      _destination?.name ?? 'Para onde vamos?',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: route == null
+                        ? null
+                        : Text(
+                            '${(route.distanceMeters / 1000).toStringAsFixed(1)} km · ${(route.durationSeconds / 60).ceil()} min',
+                          ),
+                    trailing: IconButton(
+                      tooltip: _planningExpanded
+                          ? 'Recolher planejamento'
+                          : 'Expandir planejamento',
+                      onPressed: () => setState(
+                        () => _planningExpanded = !_planningExpanded,
+                      ),
+                      icon: Icon(
+                        _planningExpanded
+                            ? Icons.keyboard_arrow_down
+                            : Icons.keyboard_arrow_up,
+                      ),
+                    ),
+                  ),
+                  if (_planningExpanded)
+                    SizedBox(
+                      height: constraints.maxHeight * .38,
+                      child: _planningControls(context),
+                    ),
+                  if (route != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _destinationBusy
+                              ? null
+                              : _toggleNavigation,
+                          icon: const Icon(Icons.navigation_rounded),
+                          label: Text(
+                            _isStartingNavigation
+                                ? 'Obtendo localização…'
+                                : 'Iniciar viagem',
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _planningControls(BuildContext context) {
+    final route = _route;
     return ListView(
       controller: _pageScroll,
       padding: const EdgeInsets.all(20),
       children: [
-        const PageHeader(
-          title: 'Rota com clima',
-          subtitle: 'Seu destino, com o clima de cada trecho',
-        ),
-        const SizedBox(height: 18),
         TextField(
           controller: _destinationController,
           textInputAction: TextInputAction.search,
@@ -516,74 +607,22 @@ class _RoutePageState extends State<RoutePage> {
           WeatherErrorCard(message: _errorMessage!),
           const SizedBox(height: 18),
         ],
-        InfoCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(_selectedTransport.icon, color: const Color(0xFF1B7F8C)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _destination?.name ??
-                          'Vamos escolher seu próximo destino?',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                key: _mapKey,
-                height: 300,
-                child: _RouteMap(
-                  mapController: _mapController,
-                  origin: _origin,
-                  destination: _destination,
-                  route: route,
-                  climatePoints: _climatePoints,
-                  filter: _selectedFilter,
-                  liveLocation: _liveLocation,
-                  onDestinationTap: _destinationBusy
-                      ? null
-                      : (point) =>
-                            _pickDestinationOnMap(initialDestination: point),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                route == null
-                    ? 'Busque um endereço ou toque no mapa para marcar o destino.'
-                    : '${_selectedFilter.title}: compare os valores nos pontos e as cores da legenda. Toque em um ponto para abrir os detalhes.',
-                style: const TextStyle(color: Color(0xFF5A6B70)),
-              ),
-              if (route != null)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: _openFullMap,
-                    icon: const Icon(Icons.open_in_full),
-                    label: const Text('Abrir mapa'),
-                  ),
-                ),
-            ],
+        if (route != null)
+          TextButton.icon(
+            onPressed: _openFullMap,
+            icon: const Icon(Icons.open_in_full),
+            label: const Text('Abrir mapa'),
           ),
-        ),
         if (route != null && _departureAt != null) ...[
           const SizedBox(height: 16),
           RouteTripSummary(
             route: route,
             departureAt: _departureAt!,
             points: _climatePoints,
-            isLoading: _isLoading,
+            isLoading: _isLoadingClimate,
             onForecast: _openForecastTimeline,
             onStart: _destinationBusy ? null : _toggleNavigation,
+            showStart: false,
           ),
         ],
         if (_isNavigating) ...[
@@ -603,7 +642,7 @@ class _RoutePageState extends State<RoutePage> {
   }
 }
 
-class _RouteMap extends StatelessWidget {
+class _RouteMap extends StatefulWidget {
   const _RouteMap({
     required this.mapController,
     required this.origin,
@@ -615,6 +654,8 @@ class _RouteMap extends StatelessWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(8)),
     this.onUserGesture,
     this.onDestinationTap,
+    this.progress,
+    super.key,
   });
   final MapController mapController;
   final LatLng? origin;
@@ -626,10 +667,75 @@ class _RouteMap extends StatelessWidget {
   final BorderRadius borderRadius;
   final VoidCallback? onUserGesture;
   final ValueChanged<LatLng>? onDestinationTap;
+  final RouteProgress? progress;
+
+  @override
+  State<_RouteMap> createState() => _RouteMapState();
+}
+
+class _RouteMapState extends State<_RouteMap> {
+  bool _forecastsVisible = true;
+  RouteResult? _lineRoute;
+  RouteProgress? _lineProgress;
+  double? _lineMeters;
+  RouteWeatherFilter? _lineFilter;
+  List<RouteClimatePoint> _lineClimate = const [];
+  List<Polyline>? _lineCache;
+
+  List<Polyline> _polylines(List<LatLng> points, List<LatLng> visiblePoints) {
+    final climate = widget.climatePoints;
+    var sameWeather = climate.length == _lineClimate.length;
+    for (var i = 0; sameWeather && i < climate.length; i++) {
+      sameWeather =
+          climate[i].routeIndex == _lineClimate[i].routeIndex &&
+          identical(climate[i].weather, _lineClimate[i].weather);
+    }
+    if (_lineCache != null &&
+        identical(_lineRoute, widget.route) &&
+        identical(_lineProgress, widget.progress) &&
+        _lineMeters == widget.progress?.traveledMeters &&
+        _lineFilter == widget.filter &&
+        sameWeather) {
+      return _lineCache!;
+    }
+    _lineRoute = widget.route;
+    _lineProgress = widget.progress;
+    _lineMeters = widget.progress?.traveledMeters;
+    _lineFilter = widget.filter;
+    _lineClimate = climate;
+    return _lineCache = [
+      Polyline(points: visiblePoints, color: Colors.white, strokeWidth: 11),
+      if (climate.length >= 2 &&
+          (climate.first.routeIndex != 0 ||
+              climate.last.routeIndex != points.length - 1))
+        Polyline(
+          points: visiblePoints,
+          color: const Color(0xFF1B7F8C),
+          strokeWidth: 6,
+        ),
+      ..._routePolylines(points, climate, widget.filter),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
+    final _RouteMap(
+      :mapController,
+      :origin,
+      :destination,
+      :route,
+      :filter,
+      :liveLocation,
+      :borderRadius,
+      :onUserGesture,
+      :onDestinationTap,
+      :progress,
+    ) = widget;
+    final climatePoints = _forecastsVisible
+        ? widget.climatePoints
+        : const <RouteClimatePoint>[];
     final points = route?.points ?? const <LatLng>[];
+    final visiblePoints = progress?.remainingPoints() ?? points;
     final center = origin ?? const LatLng(-23.5505, -46.6333);
     return ClipRRect(
       borderRadius: borderRadius,
@@ -640,120 +746,151 @@ class _RouteMap extends StatelessWidget {
             child: ClipRect(
               key: const ValueKey('route-map-viewport'),
               clipBehavior: Clip.hardEdge,
-              child: FlutterMap(
-                mapController: mapController,
-                options: MapOptions(
-                  initialCenter: center,
-                  initialZoom: 13,
-                  onTap: onDestinationTap == null
-                      ? null
-                      : (_, point) => onDestinationTap!(point),
-                  onLongPress: onDestinationTap == null
-                      ? null
-                      : (_, point) => onDestinationTap!(point),
-                  onPositionChanged: (_, hasGesture) {
-                    if (hasGesture) onUserGesture?.call();
-                  },
-                ),
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.example.app_clima',
-                  ),
-                  if (points.length > 1)
-                    PolylineLayer(
-                      polylines: [
-                        Polyline(
-                          points: points,
-                          color: Colors.white,
-                          strokeWidth: 11,
-                        ),
-                        ..._routePolylines(points, climatePoints, filter),
-                      ],
+                  FlutterMap(
+                    mapController: mapController,
+                    options: MapOptions(
+                      initialCenter: center,
+                      initialZoom: 13,
+                      onTap: onDestinationTap == null
+                          ? null
+                          : (_, point) => onDestinationTap(point),
+                      onLongPress: onDestinationTap == null
+                          ? null
+                          : (_, point) => onDestinationTap(point),
+                      onPositionChanged: (_, hasGesture) {
+                        if (hasGesture) onUserGesture?.call();
+                      },
                     ),
-                  MarkerLayer(
-                    markers: [
-                      if (origin != null)
-                        Marker(
-                          point: origin!,
-                          width: 42,
-                          height: 42,
-                          child: const Icon(
-                            Icons.my_location,
-                            color: Color(0xFF12343B),
-                            size: 30,
-                          ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.example.app_clima',
+                      ),
+                      if (visiblePoints.length > 1)
+                        PolylineLayer(
+                          polylines: _polylines(points, visiblePoints),
                         ),
-                      if (destination != null)
-                        Marker(
-                          point: destination!.location,
-                          width: 46,
-                          height: 46,
-                          child: const Icon(
-                            Icons.location_pin,
-                            color: Color(0xFFE05A47),
-                            size: 42,
-                          ),
-                        ),
-                      for (var index = 0; index < climatePoints.length; index++)
-                        Marker(
-                          point: points[climatePoints[index].routeIndex],
-                          width: 14,
-                          height: 14,
-                          child: DecoratedBox(
-                            key: ValueKey('route-forecast-anchor-$index'),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: filter.colorFor(
-                                climatePoints[index].weather,
+                      MarkerLayer(
+                        markers: [
+                          if (origin != null)
+                            Marker(
+                              point: origin,
+                              width: 42,
+                              height: 42,
+                              child: const Icon(
+                                Icons.my_location,
+                                color: Color(0xFF12343B),
+                                size: 30,
                               ),
-                              border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x55000000),
-                                  blurRadius: 4,
+                            ),
+                          if (destination != null)
+                            Marker(
+                              point: destination.location,
+                              width: 46,
+                              height: 46,
+                              child: const Icon(
+                                Icons.location_pin,
+                                color: Color(0xFFE05A47),
+                                size: 42,
+                              ),
+                            ),
+                          for (
+                            var index = 0;
+                            index < climatePoints.length;
+                            index++
+                          )
+                            Marker(
+                              point: points[climatePoints[index].routeIndex],
+                              width: 14,
+                              height: 14,
+                              child: DecoratedBox(
+                                key: ValueKey('route-forecast-anchor-$index'),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: filter.colorFor(
+                                    climatePoints[index].weather,
+                                  ),
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x55000000),
+                                      blurRadius: 4,
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
-                          ),
-                        ),
-                      for (var index = 0; index < climatePoints.length; index++)
-                        Marker(
-                          point: points[climatePoints[index].routeIndex],
-                          width:
-                              112 *
-                              (MediaQuery.textScalerOf(context).scale(14) / 14)
-                                  .clamp(1.0, double.infinity),
-                          height: 54,
-                          alignment: index.isEven
-                              ? Alignment.topCenter
-                              : Alignment.bottomCenter,
-                          rotate: true,
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              bottom: index.isEven ? 8 : 0,
-                              top: index.isOdd ? 8 : 0,
+                          for (
+                            var index = 0;
+                            index < climatePoints.length;
+                            index++
+                          )
+                            Marker(
+                              point: points[climatePoints[index].routeIndex],
+                              width:
+                                  112 *
+                                  (MediaQuery.textScalerOf(context).scale(14) /
+                                          14)
+                                      .clamp(1.0, double.infinity),
+                              height: 54,
+                              alignment: index.isEven
+                                  ? Alignment.topCenter
+                                  : Alignment.bottomCenter,
+                              rotate: true,
+                              child: Padding(
+                                padding: EdgeInsets.only(
+                                  bottom: index.isEven ? 8 : 0,
+                                  top: index.isOdd ? 8 : 0,
+                                ),
+                                child: RouteWeatherMapIcon(
+                                  point: climatePoints[index],
+                                  filter: filter,
+                                ),
+                              ),
                             ),
-                            child: RouteWeatherMapIcon(
-                              point: climatePoints[index],
-                              filter: filter,
+                          if (liveLocation != null)
+                            Marker(
+                              point: liveLocation,
+                              width: 48,
+                              height: 48,
+                              child: const Icon(
+                                Icons.navigation,
+                                color: Color(0xFF1B7F8C),
+                                size: 36,
+                              ),
                             ),
-                          ),
-                        ),
-                      if (liveLocation != null)
-                        Marker(
-                          point: liveLocation!,
-                          width: 48,
-                          height: 48,
-                          child: const Icon(
-                            Icons.navigation,
-                            color: Color(0xFF1B7F8C),
-                            size: 36,
-                          ),
-                        ),
+                        ],
+                      ),
                     ],
                   ),
+                  if (route != null)
+                    Positioned(
+                      left: 12,
+                      bottom: 12,
+                      child: FloatingActionButton.small(
+                        heroTag: null,
+                        tooltip: _forecastsVisible
+                            ? 'Ocultar previsões'
+                            : 'Mostrar previsões',
+                        backgroundColor: Colors.white,
+                        foregroundColor: const Color(0xFF1B7F8C),
+                        onPressed: () => setState(
+                          () => _forecastsVisible = !_forecastsVisible,
+                        ),
+                        child: Icon(
+                          _forecastsVisible
+                              ? Icons.cloud_off_outlined
+                              : Icons.cloud_outlined,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -773,10 +910,11 @@ class _RouteMap extends StatelessWidget {
     List<RouteClimatePoint> climatePoints,
     RouteWeatherFilter filter,
   ) {
+    final progress = widget.progress;
     if (climatePoints.length < 2) {
       return [
         Polyline(
-          points: points,
+          points: progress?.remainingPoints() ?? points,
           color: const Color(0xFF1B7F8C),
           strokeWidth: 6,
         ),
@@ -784,14 +922,22 @@ class _RouteMap extends StatelessWidget {
     }
     return [
       for (var index = 0; index < climatePoints.length - 1; index++)
-        Polyline(
-          points: points.sublist(
-            climatePoints[index].routeIndex,
-            climatePoints[index + 1].routeIndex + 1,
+        if (progress == null ||
+            progress.traveledMeters <
+                progress.distances[climatePoints[index + 1].routeIndex])
+          Polyline(
+            points:
+                progress?.remainingPoints(
+                  startIndex: climatePoints[index].routeIndex,
+                  endIndex: climatePoints[index + 1].routeIndex,
+                ) ??
+                points.sublist(
+                  climatePoints[index].routeIndex,
+                  climatePoints[index + 1].routeIndex + 1,
+                ),
+            color: _colorFor(climatePoints[index + 1].weather, filter),
+            strokeWidth: 7,
           ),
-          color: _colorFor(climatePoints[index + 1].weather, filter),
-          strokeWidth: 7,
-        ),
     ];
   }
 
@@ -857,6 +1003,7 @@ class RouteNavigationPage extends StatefulWidget {
     required this.filter,
     required this.initialPosition,
     this.positionStream,
+    this.forecastIndices,
     this.forecastLoader,
     this.clock = DateTime.now,
     super.key,
@@ -867,6 +1014,7 @@ class RouteNavigationPage extends StatefulWidget {
   final RouteWeatherFilter filter;
   final Position initialPosition;
   final Stream<Position>? positionStream;
+  final List<int>? forecastIndices;
   final Future<WeatherData> Function(LatLng, DateTime)? forecastLoader;
   final DateTime Function() clock;
 
@@ -878,12 +1026,16 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
     with WidgetsBindingObserver {
   final _mapController = MapController();
   StreamSubscription<Position>? _positionSubscription;
+  Future<void>? _trackingStop;
+  late DateTime _latestPositionAt = widget.initialPosition.timestamp;
   late RouteWeatherFilter _filter = widget.filter;
   late Position _position = widget.initialPosition;
   late final _progress = RouteProgress(widget.route);
   Timer? _clockTimer;
-  var _isFollowingUser = false;
+  final _clockTick = ValueNotifier<int>(0);
+  var _isFollowingUser = true;
   var _detailsVisible = true;
+  var _weatherDetailsExpanded = false;
   late List<RouteClimatePoint> _climatePoints = widget.climatePoints;
   Timer? _weatherTimer;
   DateTime? _lastWeatherAttempt;
@@ -902,31 +1054,66 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
       _position.timestamp,
       accuracy: _position.accuracy,
     );
-    _clockTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (mounted && _weatherActive) setState(() {});
-    });
+    _startClock();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _refreshWeather();
-      _showRouteOverview();
-      _positionSubscription =
-          (widget.positionStream ??
-                  Geolocator.getPositionStream(
-                    locationSettings: const LocationSettings(
-                      accuracy: LocationAccuracy.high,
-                    ),
-                  ))
-              .listen(
-                _followPosition,
-                onError: (Object error) {
-                  if (mounted) {
-                    setState(
-                      () => _trackingError = 'Não foi possível atualizar o GPS. Confira a permissão de localização.',
-                    );
-                  }
-                },
-              );
+      _centerOnUser();
+      _startTracking();
     });
+  }
+
+  void _startClock() {
+    _clockTimer?.cancel();
+    _clockTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted && _weatherActive && _detailsVisible) _clockTick.value++;
+    });
+  }
+
+  Future<void> _startTracking() async {
+    await _trackingStop;
+    if (!mounted || !_weatherActive) return;
+    final existing = _positionSubscription;
+    if (existing != null) {
+      if (existing.isPaused) existing.resume();
+      return;
+    }
+    _positionSubscription =
+        (widget.positionStream ??
+                Geolocator.getPositionStream(
+                  locationSettings:
+                      !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+                      ? AndroidSettings(
+                          accuracy: LocationAccuracy.bestForNavigation,
+                          distanceFilter: 0,
+                          intervalDuration: const Duration(seconds: 2),
+                        )
+                      : const LocationSettings(
+                          accuracy: LocationAccuracy.bestForNavigation,
+                        ),
+                ))
+            .listen(
+              _followPosition,
+              onError: (Object error) {
+                if (mounted && _weatherActive) {
+                  setState(
+                    () => _trackingError = 'Não foi possível atualizar o GPS. Confira a permissão de localização.',
+                  );
+                }
+              },
+            );
+  }
+
+  void _stopTracking() {
+    final subscription = _positionSubscription;
+    if (subscription == null) return;
+    if (widget.positionStream != null) {
+      // The caller owns injected streams, which may allow only one listener.
+      if (!subscription.isPaused) subscription.pause();
+    } else {
+      _positionSubscription = null;
+      _trackingStop = subscription.cancel();
+    }
   }
 
   @override
@@ -934,7 +1121,9 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
     WidgetsBinding.instance.removeObserver(this);
     _weatherTimer?.cancel();
     _clockTimer?.cancel();
+    _clockTick.dispose();
     _positionSubscription?.cancel();
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -944,7 +1133,13 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _weatherActive = state == AppLifecycleState.resumed;
     _weatherTimer?.cancel();
-    if (!_weatherActive) return;
+    if (!_weatherActive) {
+      _clockTimer?.cancel();
+      _stopTracking();
+      return;
+    }
+    _startClock();
+    _startTracking();
     final previous = _lastWeatherAttempt;
     if (previous == null ||
         _weatherSlot(previous) != _weatherSlot(widget.clock())) {
@@ -970,9 +1165,14 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
     final now = widget.clock();
     _lastWeatherAttempt = now;
     final points = widget.route.points;
-    final indices = _climatePoints.isEmpty
-        ? {for (var i = 0; i < 4; i++) ((points.length - 1) * i / 3).round()}
-        : _climatePoints.map((point) => point.routeIndex).toSet();
+    final indices =
+        widget.forecastIndices?.toSet() ??
+        (_climatePoints.isEmpty
+            ? {
+                for (var i = 0; i < 4; i++)
+                  ((points.length - 1) * i / 3).round(),
+              }
+            : _climatePoints.map((point) => point.routeIndex).toSet());
     try {
       final refreshed = await Future.wait([
         for (final index in indices)
@@ -982,11 +1182,20 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
               final weather =
                   await (widget.forecastLoader ??
                       WeatherService.fetchForecastAt)(points[index], arrival);
-              return RouteClimatePoint(
+              final point = RouteClimatePoint(
                 routeIndex: index,
                 arrivalAt: arrival,
                 weather: weather,
               );
+              if (mounted) {
+                setState(() {
+                  _climatePoints = [
+                    ..._climatePoints.where((old) => old.routeIndex != index),
+                    point,
+                  ]..sort((a, b) => a.routeIndex.compareTo(b.routeIndex));
+                });
+              }
+              return point;
             }(),
       ]);
       if (!mounted) return;
@@ -1014,23 +1223,45 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
   }
 
   void _followPosition(Position position) {
-    if (!mounted) return;
+    if (!mounted ||
+        !_weatherActive ||
+        !position.timestamp.isAfter(_latestPositionAt)) {
+      return;
+    }
+    _latestPositionAt = position.timestamp;
     final location = LatLng(position.latitude, position.longitude);
+    final previousMeters = _progress.traveledMeters;
+    final previousOffRoute = _progress.offRoute;
+    _progress.update(location, position.timestamp, accuracy: position.accuracy);
+    const distance = Distance(roundResult: false);
+    final moved =
+        distance(LatLng(_position.latitude, _position.longitude), location) >=
+        1;
+    final turned =
+        ((position.heading - _position.heading + 540) % 360 - 180).abs() >= 3;
+    bool precise(Position fix) =>
+        fix.accuracy.isFinite && fix.accuracy >= 0 && fix.accuracy <= 50;
+    final accuracyChanged = precise(position) != precise(_position);
+    final changed =
+        moved ||
+        turned ||
+        accuracyChanged ||
+        _trackingError != null ||
+        previousMeters != _progress.traveledMeters ||
+        previousOffRoute != _progress.offRoute;
+    if (!changed) return;
     setState(() {
       _position = position;
       _trackingError = null;
-      _progress.update(
-        location,
-        position.timestamp,
-        accuracy: position.accuracy,
-      );
     });
     final heading = position.heading.isFinite && position.heading >= 0
         ? -position.heading
         : 0.0;
     // Deixa a posicao abaixo do centro para priorizar a via a frente,
     // como em aplicativos de navegacao.
-    if (_isFollowingUser) _centerOnUser(location, heading, false);
+    if (_isFollowingUser && (moved || turned)) {
+      _centerOnUser(location, heading, false);
+    }
   }
 
   void _centerOnUser([
@@ -1091,7 +1322,6 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
   @override
   Widget build(BuildContext context) {
     final progress = _progress.fraction;
-    final nextClimate = _nextClimatePoint;
     final remainingMinutes =
         (_progress.timeTo(_progress.totalMeters).inMilliseconds / 60000).ceil();
     final destinationName = widget.destination?.name ?? 'Destino';
@@ -1108,7 +1338,11 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
                     maxHeight: MediaQuery.sizeOf(context).height * 0.5,
                   ),
                   child: SingleChildScrollView(
-                    child: _navigationBottomPanel(progress, nextClimate),
+                    child: ValueListenableBuilder<int>(
+                      valueListenable: _clockTick,
+                      builder: (_, tick, child) =>
+                          _navigationBottomPanel(progress, _nextClimatePoint),
+                    ),
                   ),
                 ),
               ),
@@ -1121,7 +1355,11 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
             if (_detailsVisible)
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-                child: _navigationHeader(destinationName, remainingMinutes),
+                child: ValueListenableBuilder<int>(
+                  valueListenable: _clockTick,
+                  builder: (_, tick, child) =>
+                      _navigationHeader(destinationName, remainingMinutes),
+                ),
               ),
             Expanded(
               child: Stack(
@@ -1132,6 +1370,7 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
                       origin: widget.route.points.first,
                       destination: widget.destination,
                       route: widget.route,
+                      progress: _progress,
                       climatePoints: _estimatedClimatePoints,
                       filter: _filter,
                       liveLocation: LatLng(
@@ -1211,50 +1450,58 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
     );
   }
 
-  Widget _navigationHeader(String destinationName, int remainingMinutes) =>
-      Material(
-        color: Colors.white.withValues(alpha: 0.96),
-        borderRadius: BorderRadius.circular(16),
-        elevation: 3,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Row(
-            children: [
-              const Icon(Icons.navigation, color: Color(0xFF1B7F8C)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      destinationName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                      ),
-                    ),
-                    Text(
-                      _progress.offRoute
-                          ? 'Fora do trajeto · estimativa mantida'
-                          : _progress.isPaused(widget.clock())
-                          ? 'Parado · chegada ajustada ao retomar'
-                          : 'Chegada em cerca de $remainingMinutes min',
-                      style: const TextStyle(color: Color(0xFF5A6B70)),
-                    ),
-                  ],
+  Widget _navigationHeader(
+    String destinationName,
+    int remainingMinutes,
+  ) => Material(
+    color: Colors.white.withValues(alpha: 0.96),
+    borderRadius: BorderRadius.circular(16),
+    elevation: 3,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          const Icon(Icons.navigation, color: Color(0xFF1B7F8C)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  destinationName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
                 ),
-              ),
-              IconButton(
-                tooltip: 'Encerrar rota',
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(Icons.close),
-              ),
-            ],
+                Text(
+                  !_position.accuracy.isFinite ||
+                          _position.accuracy < 0 ||
+                          _position.accuracy > 50
+                      ? 'Sinal GPS impreciso · aguardando localização precisa'
+                      : _progress.fraction >= 0.999
+                      ? 'Você chegou ao destino'
+                      : _progress.offRoute
+                      ? 'Fora do trajeto · estimativa mantida'
+                      : _progress.isPaused(widget.clock())
+                      ? 'Parado · chegada ajustada ao retomar'
+                      : 'Chegada em cerca de $remainingMinutes min',
+                  style: const TextStyle(color: Color(0xFF5A6B70)),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
+          IconButton(
+            tooltip: 'Encerrar rota',
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    ),
+  );
 
   Widget _recenterButton() => FloatingActionButton.small(
     heroTag: 'recenter_navigation',
@@ -1271,20 +1518,6 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
   ) => Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Material(
-        color: Colors.white.withValues(alpha: 0.96),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: _RouteFilterSelector(
-            selected: _filter,
-            onSelected: (filter) => setState(() => _filter = filter),
-          ),
-        ),
-      ),
-      const SizedBox(height: 10),
-      RouteWeatherLegend(filter: _filter),
-      const SizedBox(height: 10),
       InfoCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1299,12 +1532,41 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
             ),
             const SizedBox(height: 8),
             LinearProgressIndicator(value: progress.clamp(0.0, 1.0)),
-            if (_weatherUpdatedAt != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Clima consultado às ${routeClock(_weatherUpdatedAt!)} · atualização a cada 15 min',
-              ),
-            ],
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('Clima e detalhes do trajeto'),
+              initiallyExpanded: _weatherDetailsExpanded,
+              onExpansionChanged: (value) => _weatherDetailsExpanded = value,
+              children: [
+                Material(
+                  color: Colors.white.withValues(alpha: 0.96),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: _RouteFilterSelector(
+                      selected: _filter,
+                      onSelected: (filter) => setState(() => _filter = filter),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                RouteWeatherLegend(filter: _filter),
+                const SizedBox(height: 10),
+                if (_weatherUpdatedAt != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Clima consultado às ${routeClock(_weatherUpdatedAt!)} · atualização a cada 15 min',
+                  ),
+                ],
+                if (nextClimate != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    'Próximo trecho · ${routeClock(nextClimate.arrivalAt)}\n${nextClimate.weather.locationName}\n${_filter.title}: ${_filter.valueLabel(nextClimate.weather)}\n${_filter.detailLabel(nextClimate.weather)}',
+                    style: const TextStyle(color: Color(0xFF5A6B70)),
+                  ),
+                ],
+              ],
+            ),
             if (_weatherError != null) ...[
               const SizedBox(height: 8),
               Text(_weatherError!),
@@ -1314,13 +1576,6 @@ class _RouteNavigationPageState extends State<RouteNavigationPage>
               Text(
                 _trackingError!,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-            if (nextClimate != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                'Próximo trecho · ${routeClock(nextClimate.arrivalAt)}\n${nextClimate.weather.locationName}\n${_filter.title}: ${_filter.valueLabel(nextClimate.weather)}\n${_filter.detailLabel(nextClimate.weather)}',
-                style: const TextStyle(color: Color(0xFF5A6B70)),
               ),
             ],
           ],
@@ -1392,6 +1647,12 @@ class _RouteFullMapPageState extends State<_RouteFullMapPage> {
         ),
       );
     });
+  }
+
+  @override
+  void dispose() {
+    _mapController.dispose();
+    super.dispose();
   }
 
   @override

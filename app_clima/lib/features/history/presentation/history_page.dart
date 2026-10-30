@@ -75,19 +75,39 @@ class _HistoryPageState extends State<HistoryPage> {
               ),
             )
           else
-            for (final entry in entries)
-              HistoryTile(
-                place: entry.destination,
-                detail: _details(context, entry),
-                icon: _iconFor(entry.transport),
-                onTap: entry.latitude == 0 && entry.longitude == 0
-                    ? null
-                    : () => widget.onRouteSelected?.call(entry),
-              ),
+            for (var index = 0; index < entries.length; index++) ...[
+              if (index == 0 ||
+                  _date(entries[index].createdAt) !=
+                      _date(entries[index - 1].createdAt))
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    MaterialLocalizations.of(context)
+                        .formatMediumDate(entries[index].createdAt),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF087F8C),
+                    ),
+                  ),
+                ),
+              _entryTile(context, entries[index]),
+            ],
         ],
       );
     },
   );
+
+  DateTime _date(DateTime date) => DateTime(date.year, date.month, date.day);
+
+  Widget _entryTile(BuildContext context, RouteHistoryEntry entry) =>
+      HistoryTile(
+        place: entry.destination,
+        detail: _details(context, entry),
+        icon: _iconFor(entry.transport),
+        onTap: entry.latitude == 0 && entry.longitude == 0
+            ? null
+            : () => widget.onRouteSelected?.call(entry),
+      );
 
   String _details(BuildContext context, RouteHistoryEntry entry) {
     final distance = entry.distanceMeters >= 1000

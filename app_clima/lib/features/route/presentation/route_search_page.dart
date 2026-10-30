@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../data/route_service.dart';
+import '../../history/data/route_history_repository.dart';
+import '../../history/domain/route_history_entry.dart';
 import '../domain/route_result.dart';
 import 'geoapify_attribution.dart';
 import 'route_destination_picker_page.dart';
@@ -28,6 +30,27 @@ class _RouteSearchPageState extends State<RouteSearchPage> {
   String? _activeSearch;
   String? _message;
   List<RouteDestination> _results = const [];
+  List<RouteHistoryEntry> _recent = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecent();
+  }
+
+  Future<void> _loadRecent() async {
+    try {
+      final recent = await RouteHistoryRepository.load();
+      if (mounted) {
+        setState(
+          () => _recent = recent
+              .where((entry) => entry.latitude != 0 || entry.longitude != 0)
+              .take(5)
+              .toList(),
+        );
+      }
+    } catch (_) {}
+  }
 
   @override
   void dispose() {
@@ -202,23 +225,63 @@ class _RouteSearchPageState extends State<RouteSearchPage> {
             const Text(
               'Busque por nome, endereço ou CEP completo (com ou sem hífen).',
             ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: _results.length,
-              itemBuilder: (context, index) {
-                final result = _results[index];
-                return ListTile(
-                  leading: const Icon(Icons.location_on_outlined),
-                  title: Text(result.name),
-                  subtitle: result.requiresMapConfirmation
-                      ? const Text(
-                          'CEP encontrado. Confira a localização no mapa.',
-                        )
-                      : null,
-                  onTap: _selecting ? null : () => _selectResult(result),
-                );
-              },
+          if (_controller.text.trim().isEmpty && _recent.isNotEmpty)
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Destinos recentes',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
             ),
+          Expanded(
+            child: _controller.text.trim().isEmpty && _recent.isNotEmpty
+                ? ListView(
+                    children: [
+                      for (final entry in _recent)
+                        ListTile(
+                          leading: const Icon(Icons.history),
+                          title: Text(
+                            entry.destination,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(entry.transport),
+                          trailing: const Icon(Icons.north_west),
+                          onTap: _selecting
+                              ? null
+                              : () => _selectResult(
+                                  RouteDestination(
+                                    name: entry.destination,
+                                    location: LatLng(
+                                      entry.latitude,
+                                      entry.longitude,
+                                    ),
+                                  ),
+                                ),
+                        ),
+                    ],
+                  )
+                : ListView.builder(
+                    itemCount: _results.length,
+                    itemBuilder: (context, index) {
+                      final result = _results[index];
+                      return ListTile(
+                        leading: const Icon(Icons.location_on_outlined),
+                        title: Text(
+                          result.name,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: result.requiresMapConfirmation
+                            ? const Text(
+                                'CEP encontrado. Confira a localização no mapa.',
+                              )
+                            : Text(
+                                result.name.split(',').skip(1).join(',').trim(),
+                              ),
+                        onTap: _selecting ? null : () => _selectResult(result),
+                      );
+                    },
+                  ),
           ),
           const GeoapifyAttribution(),
         ],

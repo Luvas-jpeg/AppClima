@@ -47,6 +47,23 @@ void main() {
     expect(progress.usesObservedPace, isFalse);
   });
 
+  test('recorta o traçado entre vértices e preserva os trechos futuros', () {
+    final progress = tracker();
+    fix(progress, .0005, 0);
+    final remaining = progress.remainingPoints();
+    expect(remaining.first.longitude, closeTo(.0005, 1e-9));
+    expect(remaining.skip(1), progress.route.points.skip(1));
+    expect(
+      progress.remainingPoints(startIndex: 1),
+      progress.route.points.sublist(1),
+    );
+    fix(progress, .005, 60);
+    expect(progress.remainingPoints(endIndex: 1), isEmpty);
+    expect(progress.remainingPoints().first.longitude, closeTo(.005, 1e-9));
+    fix(progress, .01, 120);
+    expect(progress.remainingPoints(), isEmpty);
+  });
+
   test('ritmo mais lento amplia o tempo e os horários dos pontos', () {
     final progress = tracker();
     fix(progress, 0, 0);
@@ -123,5 +140,37 @@ void main() {
     fix(progress, 0, 0);
     expect(progress.fraction, 0);
     expect(progress.timeTo(0), Duration.zero);
+  });
+
+  test('reutiliza geometria parada e invalida após avançar ou voltar', () {
+    final progress = tracker();
+    fix(progress, .0005, 0);
+    final original = progress.remainingPoints();
+    expect(identical(progress.remainingPoints(), original), isTrue);
+    fix(progress, .0005, 10);
+    expect(identical(progress.remainingPoints(), original), isTrue);
+    fix(progress, .005, 60);
+    final advanced = progress.remainingPoints();
+    expect(identical(advanced, original), isFalse);
+    expect(advanced.first.longitude, closeTo(.005, 1e-9));
+    fix(progress, .0005, 120);
+    expect(progress.remainingPoints().first.longitude, closeTo(.0005, 1e-9));
+  });
+
+  test('recorta corretamente uma rota longa com vértices duplicados', () {
+    final points = <LatLng>[
+      for (var i = 0; i <= 10000; i++)
+        for (var duplicate = 0; duplicate < 2; duplicate++)
+          LatLng(0, i / 10000),
+    ];
+    final progress = RouteProgress(
+      RouteResult(points: points, distanceMeters: 11120, durationSeconds: 600),
+    );
+    fix(progress, .90005, 0);
+    final remaining = progress.remainingPoints();
+    expect(remaining.first.longitude, closeTo(.90005, 1e-9));
+    expect(remaining.last, points.last);
+    expect(remaining.length, lessThan(2100));
+    expect(progress.remainingPoints(endIndex: 100), isEmpty);
   });
 }

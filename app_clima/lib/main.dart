@@ -181,11 +181,24 @@ class _WeatherPageState extends State<WeatherPage> {
   bool isLoading = false;
   DateTime? lastRefreshAt;
   Future<void>? _weatherRequest;
+  bool _showingSavedWeather = false;
 
   @override
   void initState() {
     super.initState();
+    if (widget.forecastLoader == null) _restoreWeather();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadWeather());
+  }
+
+  Future<void> _restoreWeather() async {
+    final saved = await WeatherService.loadSavedForecast();
+    if (!mounted || saved == null || weather != null) return;
+    setState(() {
+      weather = saved.weather;
+      currentLocation = saved.location;
+      lastRefreshAt = saved.savedAt;
+      _showingSavedWeather = true;
+    });
   }
 
   Future<void> _loadWeather() async {
@@ -220,6 +233,7 @@ class _WeatherPageState extends State<WeatherPage> {
       if (!mounted) return;
       setState(() {
         weather = result;
+        _showingSavedWeather = false;
         currentLocation = location;
         lastRefreshAt = DateTime.now();
       });
@@ -248,6 +262,8 @@ class _WeatherPageState extends State<WeatherPage> {
             title: 'Clima agora',
             subtitle: weather?.locationName ?? 'O tempo no seu próximo caminho',
           ),
+          const SizedBox(height: 14),
+          CurrentWeatherCard(weather: weather),
           const SizedBox(height: 8),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -262,7 +278,9 @@ class _WeatherPageState extends State<WeatherPage> {
                     ),
                     if (lastRefreshAt != null)
                       Text(
-                        'Consulta atualizada às ${_clock(lastRefreshAt!)}',
+                        _showingSavedWeather
+                            ? 'Previsão salva em ${_sourceTime(lastRefreshAt!)}${isLoading ? ' · atualizando…' : ''}'
+                            : 'Consulta atualizada às ${_clock(lastRefreshAt!)}',
                         style: const TextStyle(
                           fontSize: 12,
                           color: Color(0xFF5A6B70),
@@ -287,7 +305,6 @@ class _WeatherPageState extends State<WeatherPage> {
             ],
           ),
           const SizedBox(height: 14),
-          CurrentWeatherCard(weather: weather),
           if (errorMessage != null) ...[
             const SizedBox(height: 12),
             WeatherErrorCard(message: errorMessage!),
@@ -326,9 +343,11 @@ class _WeatherPageState extends State<WeatherPage> {
           const SizedBox(height: 12),
           DailyForecastList(weather: weather),
           const SizedBox(height: 20),
-          const SectionTitle('Detalhes de hoje'),
-          const SizedBox(height: 12),
-          WeatherMetricGrid(weather: weather),
+          ExpansionTile(
+            title: const Text('Detalhes de hoje'),
+            subtitle: const Text('Vento, umidade, UV e outros indicadores'),
+            children: [WeatherMetricGrid(weather: weather)],
+          ),
         ],
       ),
     );
@@ -507,6 +526,8 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   Timer? updateTimer;
   bool mapReady = false;
   int _weatherRequest = 0;
+  bool _loadingArea = false;
+  bool _areaUpdatePending = false;
   final _cities = WeatherCityService();
   final _forecastCache =
       <String, ({DateTime createdAt, Future<WeatherData> forecast})>{};
@@ -518,7 +539,7 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
             const Duration(minutes: 15)) {
       return cached.forecast;
     }
-    if (_forecastCache.length >= 64) {
+    if (_forecastCache.length >= 16) {
       _forecastCache.remove(_forecastCache.keys.first);
     }
     final forecast = (widget.forecastLoader ?? WeatherService.fetchForecast)(
@@ -535,6 +556,12 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   }
 
   Future<void> _loadNearbyWeather() async {
+    if (!mounted) return;
+    if (_loadingArea) {
+      _areaUpdatePending = true;
+      return;
+    }
+    _loadingArea = true;
     final request = ++_weatherRequest;
     setState(() {
       isLoading = true;
@@ -551,15 +578,32 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
       final cities = await (widget.cityLoader ?? _cities.findCities)(bounds);
       if (!mounted || request != _weatherRequest) return;
       var failures = 0;
-      final loaded = await Future.wait(
-        cities.map((city) async {
-          try {
-            final weather = await _cityForecast(city);
-            return WeatherPoint(city.location, weather, cityName: city.name);
-          } catch (_) {
-            _forecastCache.remove(city.id);
-            failures++;
-            return null;
+      final loaded = List<WeatherPoint?>.filled(cities.length, null);
+      var nextCity = 0;
+      // Obsolete map areas stop launching requests as soon as active work ends.
+      await Future.wait(
+        List.generate(cities.length.clamp(0, 4), (_) async {
+          while (mounted &&
+              request == _weatherRequest &&
+              nextCity < cities.length) {
+            final index = nextCity++;
+            final city = cities[index];
+            try {
+              final weather = await _cityForecast(city);
+              loaded[index] = WeatherPoint(
+                city.location,
+                weather,
+                cityName: city.name,
+              );
+              if (mounted && request == _weatherRequest) {
+                setState(
+                  () => points = loaded.whereType<WeatherPoint>().toList(),
+                );
+              }
+            } catch (_) {
+              _forecastCache.remove(city.id);
+              failures++;
+            }
           }
         }),
       );
@@ -579,8 +623,13 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
         () => errorMessage = error.toString().replaceFirst('Exception: ', ''),
       );
     } finally {
+      _loadingArea = false;
       if (mounted && request == _weatherRequest) {
         setState(() => isLoading = false);
+      }
+      if (mounted && _areaUpdatePending) {
+        _areaUpdatePending = false;
+        unawaited(_loadNearbyWeather());
       }
     }
   }
@@ -588,6 +637,8 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   @override
   void dispose() {
     updateTimer?.cancel();
+    _weatherRequest++;
+    _forecastCache.clear();
     mapController.dispose();
     _cities.close();
     super.dispose();
@@ -659,7 +710,7 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      'Clima por cidade. Toque no nome para ver os detalhes e as próximas horas.',
+                      'Toque em uma cidade ou grupo para ver a previsão.',
                       style: TextStyle(color: Color(0xFF5A6B70), fontSize: 12),
                     ),
                     if (errorMessage != null) ...[
@@ -705,7 +756,6 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                     userAgentPackageName: 'com.example.app_clima',
                   ),
                 ),
-                WeatherPointMarkerLayer(points: points, filter: selectedFilter),
                 MarkerLayer(
                   markers: [
                     Marker(
@@ -720,6 +770,7 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
                     ),
                   ],
                 ),
+                WeatherPointMarkerLayer(points: points, filter: selectedFilter),
               ],
             ),
           ),
@@ -773,6 +824,7 @@ class _WeatherMapPageState extends State<WeatherMapPage> {
   }
 
   void _scheduleAreaUpdate() {
+    _weatherRequest++;
     updateTimer?.cancel();
     updateTimer = Timer(const Duration(milliseconds: 900), () {
       if (mounted) {
@@ -807,8 +859,8 @@ class WeatherPointMarkerLayer extends StatelessWidget {
     );
     final width = 154 * scale;
     final height = 76 * scale;
-    final occupied = <Rect>[];
-    final markers = <Marker>[];
+    final groups =
+        <({WeatherPoint anchor, Rect bounds, List<WeatherPoint> points})>[];
     for (final point in points) {
       final offset = camera.latLngToScreenOffset(point.location);
       final bounds = Rect.fromCenter(
@@ -816,24 +868,91 @@ class WeatherPointMarkerLayer extends StatelessWidget {
         width: width + 12,
         height: height + 12,
       );
-      final compact = occupied.any((other) => other.overlaps(bounds));
-      occupied.add(
-        compact
-            ? Rect.fromCenter(center: offset, width: 48, height: 48)
-            : bounds,
-      );
+      final match = groups.indexWhere((group) => group.bounds.overlaps(bounds));
+      if (match < 0) {
+        groups.add((anchor: point, bounds: bounds, points: [point]));
+      } else {
+        groups[match].points.add(point);
+      }
+    }
+    final markers = <Marker>[];
+    for (final group in groups) {
+      final point = group.anchor;
+      if (group.points.length > 1) {
+        markers.add(
+          Marker(
+            point: point.location,
+            width: 64,
+            height: 64,
+            child: Semantics(
+              label: '${group.points.length} cidades próximas. Ver previsões.',
+              button: true,
+              child: Material(
+                color: filter.color,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => showModalBottomSheet<void>(
+                    context: context,
+                    showDragHandle: true,
+                    useSafeArea: true,
+                    builder: (sheetContext) => ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final city in group.points)
+                          ListTile(
+                            leading: Icon(filter.icon, color: filter.color),
+                            title: Text(
+                              city.cityName ?? city.weather.locationName,
+                            ),
+                            subtitle: Text(_value(city.weather)),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () {
+                              Navigator.of(sheetContext).pop();
+                              showModalBottomSheet<void>(
+                                context: context,
+                                isScrollControlled: true,
+                                showDragHandle: true,
+                                useSafeArea: true,
+                                builder: (_) => WeatherPointDetails(
+                                  weather: city.weather,
+                                  cityName: city.cityName,
+                                ),
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '${group.points.length}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        continue;
+      }
       markers.add(
         Marker(
           point: point.location,
-          width: compact ? 48 : width,
-          height: compact ? 48 : height,
+          width: width,
+          height: height,
           rotate: true,
           child: WeatherMapMarker(
             title: point.cityName ?? point.weather.locationName,
             value: _value(point.weather),
             icon: filter.icon,
             color: filter.color,
-            compact: compact,
+            compact: false,
             semanticLabel:
                 '${point.cityName ?? point.weather.locationName}, ${filter.label}: ${_value(point.weather)}. Toque para detalhes.',
             onTap: () => showModalBottomSheet<void>(

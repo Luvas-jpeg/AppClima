@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../domain/weather_data.dart';
+import 'weather_forecast_client.dart';
 
 class LocationService {
   static Future<Position> currentPosition() async {
@@ -36,58 +37,70 @@ class LocationService {
 }
 
 class WeatherService {
-  static String get _apiKey => dotenv.env['WEATHER_API_KEY'] ?? '';
+  static final _forecastClient = WeatherForecastClient(
+    apiKey: () =>
+        dotenv.isInitialized ? dotenv.env['WEATHER_API_KEY'] ?? '' : '',
+  );
 
   static Future<WeatherData> fetchForecast(LatLng location) async {
-    final data = await _fetchForecastJson(location, days: 3);
-    return _weatherFromJson(data);
+    final data = await _forecastClient.fetch(location, days: 3);
+    final weather = _weatherFromJson(data);
+    unawaited(_saveForecast(location, data));
+    return weather;
+  }
+
+  static Future<void> _saveForecast(
+    LatLng location,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'last_weather_v1',
+        jsonEncode({
+          'latitude': location.latitude,
+          'longitude': location.longitude,
+          'savedAt': DateTime.now().toIso8601String(),
+          'data': data,
+        }),
+      );
+    } catch (_) {}
+  }
+
+  static Future<({WeatherData weather, LatLng location, DateTime savedAt})?>
+  loadSavedForecast() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('last_weather_v1');
+      if (raw == null) return null;
+      final saved = jsonDecode(raw) as Map<String, dynamic>;
+      final savedAt = DateTime.parse(saved['savedAt'] as String);
+      if (DateTime.now().difference(savedAt) > const Duration(hours: 24)) {
+        return null;
+      }
+      return (
+        weather: _weatherFromJson(saved['data'] as Map<String, dynamic>),
+        location: LatLng(
+          (saved['latitude'] as num).toDouble(),
+          (saved['longitude'] as num).toDouble(),
+        ),
+        savedAt: savedAt,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<WeatherData> fetchForecastAt(
     LatLng location,
     DateTime expectedTime,
   ) async {
-    final data = await _fetchForecastJson(location, days: 2);
+    final data = await _forecastClient.fetch(
+      location,
+      days: 2,
+      allowCached: true,
+    );
     return _weatherFromJson(data, forecastAt: expectedTime);
-  }
-
-  static Future<Map<String, dynamic>> _fetchForecastJson(
-    LatLng location, {
-    int days = 1,
-  }) async {
-    if (_apiKey.isEmpty) {
-      throw Exception('A chave do WeatherAPI ainda nao foi configurada.');
-    }
-
-    final uri = Uri.https('api.weatherapi.com', '/v1/forecast.json', {
-      'key': _apiKey,
-      'q': '${location.latitude},${location.longitude}',
-      'days': '$days',
-      'aqi': 'no',
-      'alerts': 'no',
-      'lang': 'pt',
-    });
-    final http.Response response;
-    try {
-      response = await http.get(uri).timeout(const Duration(seconds: 15));
-    } on TimeoutException {
-      throw Exception('A WeatherAPI demorou para responder. Tente novamente.');
-    } catch (_) {
-      throw Exception(
-        'Não foi possível conectar à WeatherAPI. Verifique a internet.',
-      );
-    }
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-
-    if (response.statusCode != 200) {
-      final apiError = data['error'] as Map<String, dynamic>?;
-      throw Exception(
-        'WeatherAPI respondeu ${response.statusCode}: '
-        '${apiError?['message'] ?? 'Nao foi possivel obter o clima.'}',
-      );
-    }
-
-    return data;
   }
 
   static WeatherData _weatherFromJson(

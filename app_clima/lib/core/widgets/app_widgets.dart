@@ -45,15 +45,16 @@ class InfoCard extends StatelessWidget {
   final Widget child;
   final double? width;
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => SizedBox(
     width: width,
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
+    child: Material(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: const Color(0xFFE1EAEC)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: const BorderSide(color: Color(0xFFE1EAEC)),
+      ),
+      child: Padding(padding: const EdgeInsets.all(16), child: child),
     ),
-    child: child,
   );
 }
 

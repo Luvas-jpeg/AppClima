@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:app_clima/main.dart';
 import 'package:app_clima/features/weather/domain/weather_data.dart';
 import 'package:app_clima/features/weather/domain/weather_city.dart';
@@ -43,6 +45,99 @@ Widget page() => MaterialApp(
 );
 
 void main() {
+  testWidgets('agrupa cidades próximas e permite abrir cada previsão', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: WeatherMapPage(
+          userLocation: const LatLng(-23.55, -46.63),
+          currentWeather: weather,
+          cityLoader: (_) async => const [
+            WeatherCity(
+              id: 'a',
+              name: 'Cidade A',
+              location: LatLng(-23.55, -46.63),
+            ),
+            WeatherCity(
+              id: 'b',
+              name: 'Cidade B',
+              location: LatLng(-23.5501, -46.6301),
+            ),
+          ],
+          forecastLoader: (_) async => weather,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('2'), findsOneWidget);
+    await tester.tap(find.text('2'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cidade A'), findsOneWidget);
+    expect(find.text('Cidade B'), findsOneWidget);
+    await tester.tap(find.text('Cidade B'));
+    await tester.pumpAndSettle();
+    expect(find.text('Condições atuais'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'mover mapa interrompe o lote antigo antes de consultar outras cidades',
+    (tester) async {
+      final pending = List.generate(4, (_) => Completer<WeatherData>());
+      var calls = 0;
+      var cityCalls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WeatherMapPage(
+            userLocation: const LatLng(-23.55, -46.63),
+            currentWeather: weather,
+            cityLoader: (_) async {
+              cityCalls++;
+              return cityCalls == 1
+                  ? [
+                      for (var i = 0; i < 8; i++)
+                        WeatherCity(
+                          id: 'city-$i',
+                          name: 'Cidade $i',
+                          location: LatLng(-23.55, -46.63 + i * .001),
+                        ),
+                    ]
+                  : const [
+                      WeatherCity(
+                        id: 'new',
+                        name: 'Nova área',
+                        location: LatLng(-23.55, -46.625),
+                      ),
+                    ];
+            },
+            forecastLoader: (_) {
+              final index = calls++;
+              return index < 4 ? pending[index].future : Future.value(weather);
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(calls, 4);
+      final map = tester.widget<FlutterMap>(find.byType(FlutterMap));
+      map.options.onPositionChanged!(map.mapController!.camera, true);
+      await tester.pump(const Duration(seconds: 1));
+      expect(cityCalls, 1);
+      expect(calls, 4);
+      for (final response in pending) {
+        response.complete(weather);
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+      expect(cityCalls, 2);
+      expect(calls, 5);
+      expect(find.text('Nova área'), findsOneWidget);
+      expect(find.text('Cidade 0'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'mapa geral exibe pontos mesmo sem chuva, troca filtros e abre detalhes',
     (tester) async {

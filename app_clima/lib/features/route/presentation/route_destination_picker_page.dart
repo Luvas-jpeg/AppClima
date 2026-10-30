@@ -52,11 +52,6 @@ class _RouteDestinationPickerPageState
               children: [
                 if (widget.destinationLabel != null) ...[
                   Text(
-                    widget.destinationLabel!,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
                     widget.requiresPreciseSelection
                         ? 'O CEP foi encontrado, mas só foi possível localizar a região. Toque no mapa para marcar o destino exato.'
                         : 'Confira o ponto encontrado. Confirme esse destino ou toque no mapa para ajustar a posição.',
@@ -117,6 +112,22 @@ class _RouteDestinationPickerPageState
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (_selectedLocation != null)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(
+                      Icons.location_on,
+                      color: Color(0xFF087F8C),
+                    ),
+                    title: Text(
+                      widget.destinationLabel ?? 'Ponto selecionado',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: const Text(
+                      'Confirme o marcador no mapa para continuar',
+                    ),
+                  ),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
