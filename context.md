@@ -22,9 +22,6 @@ Precisa ser definida, nunca trabalhei com o Flutter para desenvolvimento.
 No momento, somente Flutter, pretendo criar só um Cliente-Server para o usuário usar o app, e conectar a uma API externa,
 Mas no futuro, caso eu gostar do projeto, construir uma API dedicada para o App.
 Utilizando as boas práticas de Clean Architeture.
-APIs a serem utilizadas:
-Clima: WeatherAPI.com com 1.000.000 de requisicoes no mes ou Open-Meteo com 10k de requisicao no dia
-Mapa: OpenRouteService com 2k de requisicao ao dia
 
 # Duvidas tecnicas
 
@@ -37,7 +34,5 @@ ou vai ter uma bolha de chuva, uma bolha de vento, ou uma bolha de radicao no ca
 
 # Chaves de API
 
-OpenRouteService: eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImNhYmE0YzI5ZTBlYzQ2MmFiYzhiNzI4NmE1YmQzZWZhIiwiaCI6Im11cm11cjY0In0=
-WeatherAPI: 239e030cdf444ff6a7c133133261709
-
-Ocultar essas chaves depois
+WEATHER_API_KEY
+GEOAPIFY_API_KEY
